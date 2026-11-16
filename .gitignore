@@ -3,6 +3,8 @@
 # Variables de entorno (credenciales reales)
 # Contraseña de la base de datos y clave del JWT
 .env
+# Documentación privada con las contraseñas reales de la base de datos
+DOCUMENTACION_COMPLETA.md
 
 # Python
 # Carpetas con código compilado que Python crea solo
