@@ -1,0 +1,27 @@
+# Archivos y carpetas que Git NO debe subir a GitHub
+
+# Variables de entorno (credenciales reales)
+# Contraseña de la base de datos y clave del JWT
+.env
+
+# Python
+# Carpetas con código compilado que Python crea solo
+__pycache__/
+# Archivos compilados (.pyc, .pyo, .pyd)
+*.py[cod]
+# Caché de pytest
+.pytest_cache/
+
+# Entornos virtuales
+# Entorno virtual con el nombre venv
+venv/
+# Entorno virtual con el nombre .venv
+.venv/
+# Entorno virtual con el nombre env
+env/
+
+# Editores
+# Configuración local de Visual Studio Code
+.vscode/
+# Configuración local de PyCharm
+.idea/
