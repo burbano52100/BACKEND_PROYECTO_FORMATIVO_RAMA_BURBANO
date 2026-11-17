@@ -1,1 +1,1 @@
-# Archivo vacío a propósito: le indica a Python que esta carpeta es un paquete (permite importar sus módulos)
+# Este archivo está vacío, solo sirve para que Python sepa que "tests" es un paquete

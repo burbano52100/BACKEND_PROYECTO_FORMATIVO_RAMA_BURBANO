@@ -1,77 +1,56 @@
-"""Punto de entrada de la API: crea la aplicación y registra las rutas."""
+# Este es el archivo principal de la API, aquí se crea la aplicación
+# Para correrla: uvicorn app.main:app --reload
 
-# logging configura los mensajes que se muestran en la consola del servidor
-import logging
-
-# FastAPI es la clase con la que se crea la aplicación web
+# FastAPI es la clase para crear la API
 from fastapi import FastAPI
-# Middleware que controla qué páginas web pueden llamar la API desde el navegador (CORS)
+# CORSMiddleware sirve para dejar que una página web use la API
 from fastapi.middleware.cors import CORSMiddleware
 
-# Configuración leída del .env
-from app.core.config import settings
-# Función que registra los manejadores de errores (respuestas de error uniformes)
-from app.core.errores import registrar_manejadores
-# Importa los 10 módulos de rutas (cada uno tiene un "router" con sus endpoints)
-from app.routers import (
-    # Login, refresh, perfil y cambio de contraseña
-    auth,
-    # Deudas y pagos de instructores
-    cartera,
-    # Fichas y grupos
-    fichas,
-    # Materiales y kardex
-    inventario,
-    # Menú del Día
-    menus,
-    # Recetas con costo y margen
-    recetas,
-    # Ventas e indicadores
-    reportes,
-    # Reservas y consumos
-    reservas,
-    # Buzón de sugerencias
-    sugerencias,
-    # Usuarios, beneficiarios y roles
-    usuarios,
-)
+# Traigo la lista de páginas que pueden usar la API
+from app.config import CORS_ORIGINS
+# Traigo todos los archivos de rutas
+from app.routers import auth, usuarios, fichas, menus, reservas, cartera, inventario, recetas, sugerencias, reportes
 
-# Muestra en la consola los mensajes de nivel INFO o superior, con fecha, nivel, origen y texto
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
-# Crea la aplicación; estos datos aparecen en la documentación de Swagger (/docs)
+# Creo la aplicación (el título y la descripción salen en /docs)
 app = FastAPI(
-    # Título de la API
-    title="GastroSENA API",
-    # Texto de presentación que se ve en Swagger (en formato Markdown)
-    description=(
-        "API REST del sistema de almuerzos del SENA - Tecnoparque Agroecológico Yamboró (Pitalito, Huila). "
-        "Proyecto formativo ADSO, ficha 3312744.\n\n"
-        "1. Inicie sesión en **POST /api/v1/auth/login**.\n"
-        "2. Copie el `access_token` y péguelo en el botón **Authorize**."
-    ),
-    # Versión de la API
-    version="1.0.0",
+    title="GastroSENA API",  # Nombre de la API
+    description="API para reservar y controlar los almuerzos del SENA Tecnoparque Yamboró. Primero haga login y luego pegue el access_token en el botón Authorize.",  # Explicación
+    version="1.0",  # Versión
 )
 
-# CORS: solo los orígenes autorizados en el .env pueden llamar la API desde un navegador (RT11)
+# Configuro el CORS para que las páginas de la lista puedan usar la API
 app.add_middleware(
-    # Middleware de CORS de FastAPI
-    CORSMiddleware,
-    # Lista de páginas web autorizadas (sale de CORS_ORIGINS en el .env)
-    allow_origins=settings.cors_origins,
-    # Permite enviar credenciales (encabezados de autorización) desde esas páginas
-    allow_credentials=True,
-    # Métodos HTTP permitidos
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-    # Encabezados permitidos: el token y el tipo de contenido (JSON)
-    allow_headers=["Authorization", "Content-Type"],
+    CORSMiddleware,  # El middleware de CORS
+    allow_origins=CORS_ORIGINS,  # Páginas que pueden usar la API
+    allow_credentials=True,  # Deja mandar el token
+    allow_methods=["*"],  # Deja usar todos los métodos (GET, POST, PUT, PATCH, DELETE)
+    allow_headers=["*"],  # Deja mandar todos los encabezados
 )
 
-# Registra los manejadores de errores para que todas las respuestas de error tengan la misma forma
-registrar_manejadores(app)
+# Agrego las rutas de login
+app.include_router(auth.router, prefix="/api/v1")
+# Agrego las rutas de usuarios
+app.include_router(usuarios.router, prefix="/api/v1")
+# Agrego las rutas de fichas
+app.include_router(fichas.router, prefix="/api/v1")
+# Agrego las rutas de menús
+app.include_router(menus.router, prefix="/api/v1")
+# Agrego las rutas de reservas
+app.include_router(reservas.router, prefix="/api/v1")
+# Agrego las rutas de cartera
+app.include_router(cartera.router, prefix="/api/v1")
+# Agrego las rutas de inventario
+app.include_router(inventario.router, prefix="/api/v1")
+# Agrego las rutas de recetas
+app.include_router(recetas.router, prefix="/api/v1")
+# Agrego las rutas de sugerencias
+app.include_router(sugerencias.router, prefix="/api/v1")
+# Agrego las rutas de reportes
+app.include_router(reportes.router, prefix="/api/v1")
 
-# Recorre los 10 módulos de rutas en este orden (es el orden en que aparecen en Swagger)
-for modulo in (auth, usuarios, fichas, menus, reservas, cartera, inventario, recetas, sugerencias, reportes):
-    # Agrega las rutas del módulo con el prefijo /api/v1 (ejemplo: /api/v1/auth/login)
-    app.include_router(modulo.router, prefix="/api/v1")
+
+# Ruta de inicio para saber si la API está funcionando
+@app.get("/")
+def inicio():
+    # Devuelvo un mensaje de bienvenida
+    return {"mensaje": "La API de GastroSENA está funcionando. Vaya a /docs para ver la documentación"}

@@ -1,100 +1,126 @@
-"""Endpoints de autenticación."""
+# Rutas para iniciar sesión, pedir un token nuevo, ver el perfil y cambiar la contraseña
 
-# Annotated asocia la dependencia (Depends) al tipo
-from typing import Annotated
+# datetime es la fecha y hora actual y timedelta sirve para sumar minutos
+from datetime import datetime, timedelta
 
-# APIRouter agrupa endpoints; Depends inyecta dependencias
-from fastapi import APIRouter, Depends
+# APIRouter sirve para agrupar rutas, Depends para las dependencias y HTTPException para los errores
+from fastapi import APIRouter, Depends, HTTPException
+# Session es el tipo de la sesión de la base de datos
+from sqlalchemy.orm import Session
 
-# Documenta en Swagger los errores de cada endpoint
-from app.core.errores import respuestas_error
-# Usuario autenticado de cualquier rol
-from app.core.permisos import UsuarioActual
-# Sesión de base de datos por petición
-from app.database.conexion import SesionDB
-# Esquemas de entrada y salida de autenticación
-from app.schemas.auth import CambioPasswordEntrada, LoginEntrada, RefreshEntrada, TokenRespuesta
-# Respuesta con un mensaje
-from app.schemas.comunes import Mensaje
-# Respuesta con los datos del usuario (sin contraseña)
-from app.schemas.usuario import UsuarioSalida
-# Servicio con las reglas de autenticación
-from app.services.auth_service import AuthService
+# Función que da la sesión de la base de datos
+from app.database import get_db
+# Modelo de usuario
+from app.models import Usuario
+# Esquemas que uso en estas rutas
+from app.schemas import LoginDatos, TokenRespuesta, RefreshDatos, CambiarPasswordDatos, UsuarioRespuesta
+# Funciones de seguridad
+from app.seguridad import verificar_password, encriptar_password, password_es_segura, crear_token, leer_token, obtener_usuario_actual
 
-# Router con prefijo /auth; "tags" agrupa estos endpoints en Swagger
+# Creo el router, todas las rutas empiezan con /auth
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
 
-
-# Dependencia que crea el servicio con la sesión de la petición
-def obtener_servicio(db: SesionDB) -> AuthService:
-    # Devuelve un AuthService nuevo
-    return AuthService(db)
-
-
-# Atajo: un parámetro "servicio: Servicio" recibe el AuthService listo
-Servicio = Annotated[AuthService, Depends(obtener_servicio)]
+# Cuántas veces se puede equivocar antes de bloquear la cuenta
+MAXIMO_INTENTOS = 5
+# Cuántos minutos se bloquea la cuenta
+MINUTOS_BLOQUEO = 15
 
 
-# Endpoint POST /api/v1/auth/login (público: no exige token)
-@router.post(
-    "/login",  # Ruta, que se suma al prefijo /auth
-    response_model=TokenRespuesta,  # Forma de la respuesta exitosa (200)
-    summary="Iniciar sesión (RF02)",  # Título corto en Swagger
-    description=(  # Explicación larga en Swagger (Markdown)
-        "Valida correo y contraseña y devuelve un **access_token** (corto), un **refresh_token** (largo) y el "
-        "**rol**, para que el frontend abra el panel correcto (RF03). Tras 5 intentos fallidos la cuenta se "
-        "bloquea 15 minutos. Una cuenta inactiva no puede ingresar.\n\n**Rol requerido:** ninguno (público)."
-    ),
-    responses=respuestas_error(401, 403, 422),  # Errores posibles, documentados en Swagger
-)
-# Recibe el cuerpo validado con LoginEntrada y el servicio
-def iniciar_sesion(datos: LoginEntrada, servicio: Servicio):
-    # Ejecuta el inicio de sesión y devuelve los tokens
-    return servicio.iniciar_sesion(datos)
+# Ruta para iniciar sesión (es la única que no necesita token)
+@router.post("/login", response_model=TokenRespuesta)
+def login(datos: LoginDatos, db: Session = Depends(get_db)):
+    # Busco el usuario por el correo (en minúsculas)
+    usuario = db.query(Usuario).filter(Usuario.correo == datos.correo.lower()).first()
+    # Si no existe el usuario
+    if usuario is None:
+        # No digo si el error es el correo o la contraseña por seguridad
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+    # Si la cuenta está bloqueada y todavía no ha pasado el tiempo
+    if usuario.bloqueado_hasta is not None and usuario.bloqueado_hasta > datetime.now():
+        # Respondo 403
+        raise HTTPException(status_code=403, detail="La cuenta está bloqueada por muchos intentos fallidos, intente más tarde")
+    # Si la contraseña está mal
+    if not verificar_password(datos.password, usuario.password):
+        # Le sumo un intento fallido
+        usuario.intentos_fallidos = usuario.intentos_fallidos + 1
+        # Si ya llegó al máximo de intentos
+        if usuario.intentos_fallidos >= MAXIMO_INTENTOS:
+            # Bloqueo la cuenta por 15 minutos
+            usuario.bloqueado_hasta = datetime.now() + timedelta(minutes=MINUTOS_BLOQUEO)
+            # Vuelvo a poner los intentos en 0
+            usuario.intentos_fallidos = 0
+            # Guardo los cambios
+            db.commit()
+            # Respondo 403
+            raise HTTPException(status_code=403, detail="La cuenta se bloqueó 15 minutos por muchos intentos fallidos")
+        # Guardo el intento fallido
+        db.commit()
+        # Respondo 401
+        raise HTTPException(status_code=401, detail="Correo o contraseña incorrectos")
+    # Si la cuenta está desactivada no puede entrar
+    if usuario.activo == False:
+        # Respondo 403
+        raise HTTPException(status_code=403, detail="La cuenta está inactiva, hable con el encargado")
+    # Como entró bien, borro los intentos fallidos
+    usuario.intentos_fallidos = 0
+    # Y le quito el bloqueo
+    usuario.bloqueado_hasta = None
+    # Guardo los cambios
+    db.commit()
+    # Devuelvo los tokens y el rol
+    return {
+        "access_token": crear_token(usuario.id, "access"),  # Token para las peticiones
+        "refresh_token": crear_token(usuario.id, "refresh"),  # Token para renovar
+        "token_type": "bearer",  # Tipo de token
+        "rol": usuario.rol.nombre,  # Rol del usuario
+    }
 
 
-# Endpoint POST /api/v1/auth/refresh
-@router.post(
-    "/refresh",  # Ruta
-    response_model=TokenRespuesta,  # Respuesta: tokens nuevos
-    summary="Renovar el token de acceso",  # Título en Swagger
-    description="Recibe el refresh_token y entrega tokens nuevos.\n\n**Rol requerido:** refresh_token válido.",  # Explicación
-    responses=respuestas_error(401, 422),  # Errores posibles
-)
-# Recibe el refresh token en el cuerpo
-def renovar_token(datos: RefreshEntrada, servicio: Servicio):
-    # Valida el refresh token y devuelve tokens nuevos
-    return servicio.renovar_tokens(datos.refresh_token)
+# Ruta para pedir tokens nuevos con el refresh token
+@router.post("/refresh", response_model=TokenRespuesta)
+def renovar_token(datos: RefreshDatos, db: Session = Depends(get_db)):
+    # Leo el refresh token y saco el id del usuario
+    usuario_id = leer_token(datos.refresh_token, "refresh")
+    # Busco el usuario
+    usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
+    # Si no existe o está desactivado
+    if usuario is None or usuario.activo == False:
+        # Respondo 401
+        raise HTTPException(status_code=401, detail="El usuario no existe o está inactivo")
+    # Devuelvo tokens nuevos
+    return {
+        "access_token": crear_token(usuario.id, "access"),  # Token nuevo para las peticiones
+        "refresh_token": crear_token(usuario.id, "refresh"),  # Refresh token nuevo
+        "token_type": "bearer",  # Tipo de token
+        "rol": usuario.rol.nombre,  # Rol del usuario
+    }
 
 
-# Endpoint GET /api/v1/auth/perfil
-@router.get(
-    "/perfil",  # Ruta
-    response_model=UsuarioSalida,  # Respuesta: datos del usuario sin contraseña
-    summary="Ver mi perfil (RF04)",  # Título en Swagger
-    description="Datos de la cuenta dueña del token; nunca incluye la contraseña.\n\n**Rol requerido:** cualquiera.",  # Explicación
-    responses=respuestas_error(401),  # Error posible: sin token
-)
-# UsuarioActual exige token válido y entrega el usuario
-def ver_perfil(usuario: UsuarioActual):
-    # Devuelve el usuario; FastAPI lo filtra con UsuarioSalida (sin password_hash)
-    return usuario
+# Ruta para ver los datos de quien inició sesión
+@router.get("/perfil", response_model=UsuarioRespuesta)
+def ver_perfil(usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Devuelvo el usuario (el esquema UsuarioRespuesta no muestra la contraseña)
+    return usuario_actual
 
 
-# Endpoint PUT /api/v1/auth/password
-@router.put(
-    "/password",  # Ruta
-    response_model=Mensaje,  # Respuesta: un mensaje
-    summary="Cambiar mi contraseña",  # Título en Swagger
-    description=(  # Explicación
-        "La nueva contraseña debe tener mínimo 8 caracteres, con mayúsculas, minúsculas y números.\n\n"
-        "**Rol requerido:** cualquiera."
-    ),
-    responses=respuestas_error(400, 401, 422),  # Errores posibles
-)
-# Recibe las contraseñas, el usuario autenticado y el servicio
-def cambiar_password(datos: CambioPasswordEntrada, usuario: UsuarioActual, servicio: Servicio):
-    # Cambia la contraseña (lanza error si la actual no coincide)
-    servicio.cambiar_password(usuario, datos)
-    # Mensaje de confirmación
-    return {"mensaje": "La contraseña se cambió correctamente."}
+# Ruta para cambiar la contraseña propia
+@router.put("/password")
+def cambiar_password(datos: CambiarPasswordDatos, usuario_actual: Usuario = Depends(obtener_usuario_actual), db: Session = Depends(get_db)):
+    # Reviso que la contraseña actual sea la correcta
+    if not verificar_password(datos.password_actual, usuario_actual.password):
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La contraseña actual no es correcta")
+    # Reviso que la nueva sea segura
+    if not password_es_segura(datos.password_nueva):
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La contraseña nueva debe tener mínimo 8 caracteres, una mayúscula, una minúscula y un número")
+    # La nueva no puede ser igual a la anterior
+    if datos.password_actual == datos.password_nueva:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La contraseña nueva tiene que ser diferente a la actual")
+    # Encripto la contraseña nueva y la guardo
+    usuario_actual.password = encriptar_password(datos.password_nueva)
+    # Guardo los cambios
+    db.commit()
+    # Respondo con un mensaje
+    return {"mensaje": "La contraseña se cambió correctamente"}

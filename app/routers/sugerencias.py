@@ -1,101 +1,139 @@
-"""Endpoints del buzón de sugerencias."""
+# Rutas del buzón de sugerencias
 
-# Annotated asocia dependencias o fuentes de datos a un tipo
-from typing import Annotated
+# datetime es la fecha y hora actual
+from datetime import datetime
+# Optional quiere decir que un parámetro puede venir vacío
+from typing import Optional
 
-# Herramientas de FastAPI
-from fastapi import APIRouter, Depends, Query, status
+# APIRouter agrupa las rutas, Depends es para dependencias y HTTPException para los errores
+from fastapi import APIRouter, Depends, HTTPException
+# Session es el tipo de la sesión de la base de datos
+from sqlalchemy.orm import Session
 
-# Documenta los errores en Swagger
-from app.core.errores import respuestas_error
-# CualquierRol y Encargado
-from app.core.permisos import CualquierRol, Encargado
-# Sesión de base de datos
-from app.database.conexion import SesionDB
-# Respuesta paginada y paginación base
-from app.schemas.comunes import Pagina, PaginacionBase
-# Esquemas de sugerencias
-from app.schemas.sugerencia import (
-    # Entrada para atender
-    AtenderEntrada,
-    # Filtros del buzón
-    FiltrosSugerencia,
-    # Página del buzón con contadores
-    PaginaSugerencias,
-    # Entrada para enviar
-    SugerenciaCrear,
-    # Salida de una sugerencia
-    SugerenciaSalida,
-)
-# Servicio con las reglas del buzón
-from app.services.sugerencia_service import SugerenciaService
+# Función que da la sesión de la base de datos
+from app.database import get_db
+# Modelos que uso
+from app.models import Sugerencia, Usuario
+# Esquemas que uso
+from app.schemas import SugerenciaCrear, AtenderDatos, SugerenciaRespuesta
+# Funciones de seguridad
+from app.seguridad import obtener_usuario_actual, verificar_rol
 
-# Router con prefijo /sugerencias
+# Creo el router, todas las rutas empiezan con /sugerencias
 router = APIRouter(prefix="/sugerencias", tags=["Sugerencias"])
 
 
-# Dependencia que crea el servicio
-def obtener_servicio(db: SesionDB) -> SugerenciaService:
-    # Devuelve un SugerenciaService nuevo
-    return SugerenciaService(db)
+# Función que convierte una sugerencia en un diccionario con el nombre de quien la mandó
+def convertir_sugerencia(sugerencia):
+    # Armo el diccionario con los datos de la sugerencia
+    return {
+        "id": sugerencia.id,  # Id de la sugerencia
+        "usuario_id": sugerencia.usuario_id,  # Id de quien la mandó
+        "nombre_usuario": sugerencia.usuario.nombre,  # Nombre de quien la mandó
+        "asunto": sugerencia.asunto,  # Asunto
+        "mensaje": sugerencia.mensaje,  # Mensaje
+        "estado": sugerencia.estado,  # PENDIENTE o ATENDIDA
+        "respuesta": sugerencia.respuesta,  # Respuesta del encargado
+        "fecha_creacion": sugerencia.fecha_creacion,  # Cuándo se mandó
+        "fecha_respuesta": sugerencia.fecha_respuesta,  # Cuándo se respondió
+    }
 
 
-# Atajo para recibir el servicio
-Servicio = Annotated[SugerenciaService, Depends(obtener_servicio)]
+# Ruta para mandar una sugerencia (todos los roles)
+@router.post("", response_model=SugerenciaRespuesta, status_code=201)
+def enviar_sugerencia(datos: SugerenciaCrear, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Creo la sugerencia con el usuario que la manda
+    nueva_sugerencia = Sugerencia(
+        usuario_id=usuario_actual.id,  # Quién la manda
+        asunto=datos.asunto,  # Asunto
+        mensaje=datos.mensaje,  # Mensaje
+        estado="PENDIENTE",  # Empieza pendiente
+    )
+    # La agrego a la sesión
+    db.add(nueva_sugerencia)
+    # La guardo
+    db.commit()
+    # La vuelvo a leer para tener el id y la fecha
+    db.refresh(nueva_sugerencia)
+    # Devuelvo la sugerencia
+    return nueva_sugerencia
 
 
-# Endpoint POST /api/v1/sugerencias
-@router.post(
-    "",  # Ruta = /sugerencias
-    response_model=SugerenciaSalida,  # Respuesta: la sugerencia creada
-    status_code=status.HTTP_201_CREATED,  # Código 201
-    summary="Enviar una sugerencia (RF47)",  # Título
-    description="Asunto y mensaje obligatorios (mensaje de máximo 500 caracteres).\n\n**Rol requerido:** cualquiera.",  # Explicación
-    responses=respuestas_error(401, 422),  # Errores posibles
-)
-# Recibe el cuerpo y el usuario autenticado (cualquier rol)
-def enviar_sugerencia(datos: SugerenciaCrear, servicio: Servicio, usuario: CualquierRol):
-    # Crea y devuelve la sugerencia
-    return servicio.crear(datos, usuario)
+# Ruta para ver mis sugerencias (todos los roles)
+@router.get("/mias", response_model=list[SugerenciaRespuesta])
+def mis_sugerencias(db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Traigo las sugerencias de la persona de la más nueva a la más vieja
+    sugerencias = db.query(Sugerencia).filter(Sugerencia.usuario_id == usuario_actual.id).order_by(Sugerencia.id.desc()).all()
+    # Devuelvo la lista
+    return sugerencias
 
 
-# Endpoint GET /api/v1/sugerencias/mias
-@router.get(
-    "/mias",  # Ruta
-    response_model=Pagina[SugerenciaSalida],  # Respuesta: página de sugerencias propias
-    summary="Mis sugerencias",  # Título
-    description="Sugerencias enviadas por quien consulta, con su respuesta.\n\n**Rol requerido:** cualquiera.",  # Explicación
-    responses=respuestas_error(401, 422),  # Errores posibles
-)
-# Paginación en la URL y el usuario autenticado
-def mis_sugerencias(filtros: Annotated[PaginacionBase, Query()], servicio: Servicio, usuario: CualquierRol):
-    # Devuelve sus sugerencias
-    return servicio.listar_mias(usuario, filtros)
+# Ruta para ver todas las sugerencias con los contadores (solo el encargado)
+@router.get("")
+def listar_sugerencias(
+    estado: Optional[str] = None,  # Filtrar por PENDIENTE o ATENDIDA
+    skip: int = 0,  # Cuántos registros me salto
+    limit: int = 100,  # Cuántos registros traigo como máximo
+    db: Session = Depends(get_db),  # Sesión de la base de datos
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
+):
+    # Solo el encargado puede ver el buzón
+    verificar_rol(usuario_actual, ["encargado"])
+    # Empiezo con todas las sugerencias
+    consulta = db.query(Sugerencia)
+    # Si mandaron estado
+    if estado is not None:
+        # Filtro por estado
+        consulta = consulta.filter(Sugerencia.estado == estado)
+    # Ordeno de la más nueva a la más vieja y pagino
+    sugerencias = consulta.order_by(Sugerencia.id.desc()).offset(skip).limit(limit).all()
+    # Aquí voy a guardar las sugerencias convertidas
+    lista = []
+    # Recorro las sugerencias
+    for sugerencia in sugerencias:
+        # Agrego cada sugerencia convertida
+        lista.append(convertir_sugerencia(sugerencia))
+    # Cuento todas las sugerencias
+    total = db.query(Sugerencia).count()
+    # Cuento las pendientes
+    pendientes = db.query(Sugerencia).filter(Sugerencia.estado == "PENDIENTE").count()
+    # Cuento las atendidas
+    atendidas = db.query(Sugerencia).filter(Sugerencia.estado == "ATENDIDA").count()
+    # Devuelvo los contadores y la lista
+    return {
+        "contadores": {  # Cuántas sugerencias hay
+            "total": total,  # Todas
+            "pendientes": pendientes,  # Sin atender
+            "atendidas": atendidas,  # Ya atendidas
+        },
+        "sugerencias": lista,  # Lista de sugerencias
+    }
 
 
-# Endpoint GET /api/v1/sugerencias
-@router.get(
-    "",  # Ruta = /sugerencias
-    response_model=PaginaSugerencias,  # Respuesta: página con contadores
-    summary="Buzón del Encargado (RF48)",  # Título
-    description="Contadores de recibidas, atendidas y pendientes; las pendientes aparecen primero.\n\n**Rol requerido:** encargado.",  # Explicación
-    responses=respuestas_error(401, 403, 422),  # Errores posibles
-)
-# Filtros en la URL; solo el encargado
-def listar_sugerencias(filtros: Annotated[FiltrosSugerencia, Query()], servicio: Servicio, _: Encargado):
-    # Devuelve el buzón
-    return servicio.listar(filtros)
-
-
-# Endpoint PATCH /api/v1/sugerencias/{sugerencia_id}/atender
-@router.patch(
-    "/{sugerencia_id}/atender",  # Ruta
-    response_model=SugerenciaSalida,  # Respuesta: la sugerencia atendida
-    summary="Marcar como atendida o responder (RF49)",  # Título
-    description="Cambio de estado PENDIENTE a ATENDIDA, con respuesta opcional.\n\n**Rol requerido:** encargado.",  # Explicación
-    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores posibles
-)
-# Recibe el id, {"respuesta": ...}, el servicio y el encargado
-def atender_sugerencia(sugerencia_id: int, datos: AtenderEntrada, servicio: Servicio, encargado: Encargado):
-    # Atiende y devuelve la sugerencia
-    return servicio.atender(sugerencia_id, datos, encargado)
+# Ruta para atender o responder una sugerencia (solo el encargado)
+@router.patch("/{sugerencia_id}/atender")
+def atender_sugerencia(sugerencia_id: int, datos: AtenderDatos, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Solo el encargado puede atender sugerencias
+    verificar_rol(usuario_actual, ["encargado"])
+    # Busco la sugerencia
+    sugerencia = db.query(Sugerencia).filter(Sugerencia.id == sugerencia_id).first()
+    # Si no existe
+    if sugerencia is None:
+        # Respondo 404
+        raise HTTPException(status_code=404, detail="La sugerencia no existe")
+    # Si ya fue atendida
+    if sugerencia.estado == "ATENDIDA":
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La sugerencia ya fue atendida")
+    # Cambio el estado
+    sugerencia.estado = "ATENDIDA"
+    # Guardo la respuesta
+    sugerencia.respuesta = datos.respuesta
+    # Guardo la fecha de hoy como fecha de respuesta
+    sugerencia.fecha_respuesta = datetime.now()
+    # Guardo los cambios
+    db.commit()
+    # Vuelvo a leer la sugerencia
+    db.refresh(sugerencia)
+    # Devuelvo la sugerencia
+    return convertir_sugerencia(sugerencia)

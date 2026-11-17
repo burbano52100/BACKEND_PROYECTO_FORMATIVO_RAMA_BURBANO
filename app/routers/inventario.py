@@ -1,164 +1,401 @@
-"""Endpoints del inventario: materiales y kardex (solo el Encargado)."""
+# Rutas del inventario: materiales, movimientos (entradas, salidas y mermas) y kardex
 
-# Annotated asocia dependencias o fuentes de datos a un tipo
-from typing import Annotated
+# date es una fecha
+from datetime import date
+# Optional quiere decir que un parámetro puede venir vacío
+from typing import Optional
 
-# Herramientas de FastAPI
-from fastapi import APIRouter, Depends, Query, status
+# APIRouter agrupa las rutas, Depends es para dependencias y HTTPException para los errores
+from fastapi import APIRouter, Depends, HTTPException
+# Session es el tipo de la sesión de la base de datos
+from sqlalchemy.orm import Session
 
-# Documenta los errores en Swagger
-from app.core.errores import respuestas_error
-# Solo deja pasar al encargado
-from app.core.permisos import Encargado
-# Sesión de base de datos
-from app.database.conexion import SesionDB
-# Respuesta con mensaje y respuesta paginada
-from app.schemas.comunes import Mensaje, Pagina
-# Esquemas del inventario
-from app.schemas.inventario import (
-    # Filtros del kardex
-    FiltrosKardex,
-    # Filtros de materiales
-    FiltrosMaterial,
-    # Entrada para editar
-    MaterialActualizar,
-    # Entrada para crear
-    MaterialCrear,
-    # Salida de un material
-    MaterialSalida,
-    # Entrada de un movimiento
-    MovimientoCrear,
-    # Salida de un movimiento
-    MovimientoSalida,
-)
-# Servicio con las reglas del inventario
-from app.services.inventario_service import InventarioService
+# Función que da la sesión de la base de datos
+from app.database import get_db
+# Modelos que uso
+from app.models import Material, MovimientoInventario, Receta, RecetaIngrediente, Usuario
+# Esquemas que uso
+from app.schemas import MaterialCrear, MaterialActualizar, MovimientoCrear
+# Funciones de seguridad
+from app.seguridad import obtener_usuario_actual, verificar_rol
 
-# Router con prefijo /inventario
+# Creo el router, todas las rutas empiezan con /inventario
 router = APIRouter(prefix="/inventario", tags=["Inventario"])
 
-
-# Dependencia que crea el servicio
-def obtener_servicio(db: SesionDB) -> InventarioService:
-    # Devuelve un InventarioService nuevo
-    return InventarioService(db)
-
-
-# Atajo para recibir el servicio
-Servicio = Annotated[InventarioService, Depends(obtener_servicio)]
-
-
-# Endpoint GET /api/v1/inventario/materiales
-@router.get(
-    "/materiales",  # Ruta
-    response_model=Pagina[MaterialSalida],  # Respuesta: página de materiales
-    summary="Control de stock (RF28, RF32)",  # Título
-    description=(  # Explicación
-        "Búsqueda por nombre o código de barras y filtros por categoría y estado. Cada material trae su estado: "
-        "BUENO, BAJO, CRITICO o VENCIENDO.\n\n**Rol requerido:** encargado."
-    ),
-    responses=respuestas_error(401, 403, 422),  # Errores posibles
-)
-# Filtros en la URL; solo el encargado
-def listar_materiales(filtros: Annotated[FiltrosMaterial, Query()], servicio: Servicio, _: Encargado):
-    # Devuelve la página de materiales
-    return servicio.listar_materiales(filtros)
+# Categorías que se pueden usar
+CATEGORIAS = ["PROTEINA", "GRANO", "VERDURA", "FRUTA", "LACTEO", "ABARROTE", "DESECHABLE"]
+# Unidades de medida que se pueden usar
+UNIDADES = ["KG", "G", "L", "ML", "UND"]
+# Tipos de movimiento que se pueden hacer
+TIPOS_MOVIMIENTO = ["ENTRADA", "SALIDA", "MERMA"]
+# Si al material le faltan estos días o menos para vencerse sale como VENCIENDO
+DIAS_ALERTA_VENCIMIENTO = 7
 
 
-# Endpoint GET /api/v1/inventario/materiales/{material_id}
-@router.get(
-    "/materiales/{material_id}",  # Ruta con el id
-    response_model=MaterialSalida,  # Respuesta: un material
-    summary="Consultar un material",  # Título
-    description="**Rol requerido:** encargado.",  # Explicación
-    responses=respuestas_error(401, 403, 404),  # Errores posibles
-)
-# Recibe el id
-def obtener_material(material_id: int, servicio: Servicio, _: Encargado):
-    # Devuelve el material (o 404)
-    return servicio.obtener_material(material_id)
+# Función que dice cómo está el stock de un material
+def calcular_estado_stock(material):
+    # Si el material tiene fecha de vencimiento
+    if material.fecha_vencimiento is not None:
+        # Cuento cuántos días le faltan para vencerse
+        dias_para_vencer = (material.fecha_vencimiento - date.today()).days
+        # Si le faltan 7 días o menos
+        if dias_para_vencer <= DIAS_ALERTA_VENCIMIENTO:
+            # Se está venciendo
+            return "VENCIENDO"
+    # Si tiene la mitad o menos del mínimo
+    if material.stock <= material.stock_minimo * 0.5:
+        # Está crítico
+        return "CRITICO"
+    # Si tiene el mínimo o menos
+    if material.stock <= material.stock_minimo:
+        # Está bajo
+        return "BAJO"
+    # Si no, está bien
+    return "BUENO"
 
 
-# Endpoint POST /api/v1/inventario/materiales
-@router.post(
-    "/materiales",  # Ruta
-    response_model=MaterialSalida,  # Respuesta: el material creado
-    status_code=status.HTTP_201_CREATED,  # Código 201
-    summary="Agregar un material (RF29)",  # Título
-    description=(  # Explicación
-        "Código de barras único (409). El stock inicial genera una ENTRADA en el kardex.\n\n"
-        "**Rol requerido:** encargado."
-    ),
-    responses=respuestas_error(401, 403, 409, 422),  # Errores posibles
-)
-# Recibe el cuerpo, el servicio y el encargado
-def crear_material(datos: MaterialCrear, servicio: Servicio, encargado: Encargado):
-    # Crea y devuelve el material
-    return servicio.crear_material(datos, encargado)
+# Función que convierte un material en un diccionario para responder
+def convertir_material(material):
+    # Armo el diccionario con los datos del material
+    return {
+        "id": material.id,  # Id del material
+        "codigo_barras": material.codigo_barras,  # Código de barras
+        "nombre": material.nombre,  # Nombre
+        "categoria": material.categoria,  # Categoría
+        "unidad_medida": material.unidad_medida,  # Unidad
+        "costo_unitario": material.costo_unitario,  # Costo de una unidad
+        "stock": material.stock,  # Cantidad que hay
+        "stock_minimo": material.stock_minimo,  # Cantidad mínima
+        "fecha_vencimiento": material.fecha_vencimiento,  # Fecha de vencimiento
+        "estado_stock": calcular_estado_stock(material),  # BUENO, BAJO, CRITICO o VENCIENDO
+        "activo": material.activo,  # Si está activo
+    }
 
 
-# Endpoint PATCH /api/v1/inventario/materiales/{material_id}
-@router.patch(
-    "/materiales/{material_id}",  # Ruta
-    response_model=MaterialSalida,  # Respuesta: el material actualizado
-    summary="Editar un material (RF30)",  # Título
-    description="El stock no se edita aquí: cambia con movimientos del kardex.\n\n**Rol requerido:** encargado.",  # Explicación
-    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores posibles
-)
-# Recibe el id, los cambios, el servicio y el encargado
-def actualizar_material(material_id: int, datos: MaterialActualizar, servicio: Servicio, encargado: Encargado):
-    # Actualiza y devuelve el material
-    return servicio.actualizar_material(material_id, datos, encargado)
+# Función que convierte un movimiento en un diccionario para responder
+def convertir_movimiento(movimiento):
+    # Al principio la entrada y la salida están en 0
+    entrada = 0
+    # La salida también empieza en 0
+    salida = 0
+    # Si el movimiento es una entrada
+    if movimiento.tipo == "ENTRADA":
+        # La cantidad va en la entrada
+        entrada = movimiento.cantidad
+    # Si es salida o merma
+    else:
+        # La cantidad va en la salida
+        salida = movimiento.cantidad
+    # Armo el diccionario con los datos del movimiento
+    return {
+        "id": movimiento.id,  # Id del movimiento
+        "material_id": movimiento.material_id,  # Id del material
+        "nombre_material": movimiento.material.nombre,  # Nombre del material
+        "tipo": movimiento.tipo,  # ENTRADA, SALIDA o MERMA
+        "entrada": entrada,  # Lo que entró
+        "salida": salida,  # Lo que salió
+        "saldo": movimiento.saldo,  # Lo que quedó
+        "concepto": movimiento.concepto,  # Por qué se hizo
+        "responsable": movimiento.usuario.nombre,  # Quién lo hizo
+        "fecha": movimiento.fecha,  # Cuándo se hizo
+    }
 
 
-# Endpoint DELETE /api/v1/inventario/materiales/{material_id}
-@router.delete(
-    "/materiales/{material_id}",  # Ruta
-    response_model=Mensaje,  # Respuesta: un mensaje
-    summary="Eliminar un material (RF31)",  # Título
-    description=(  # Explicación
-        "No se elimina si una receta activa lo usa (400). Con historial en el kardex se desactiva (borrado "
-        "lógico); si no, se borra.\n\n**Rol requerido:** encargado."
-    ),
-    responses=respuestas_error(400, 401, 403, 404),  # Errores posibles
-)
-# Recibe el id, el servicio y el encargado
-def eliminar_material(material_id: int, servicio: Servicio, encargado: Encargado):
-    # Elimina y devuelve el mensaje
-    return {"mensaje": servicio.eliminar_material(material_id, encargado)}
+# Ruta para ver los materiales (solo el encargado)
+@router.get("/materiales")
+def listar_materiales(
+    buscar: Optional[str] = None,  # Buscar por nombre o código de barras
+    categoria: Optional[str] = None,  # Filtrar por categoría
+    estado: Optional[str] = None,  # Filtrar por estado del stock
+    activo: bool = True,  # Por defecto muestro los activos
+    skip: int = 0,  # Cuántos registros me salto
+    limit: int = 100,  # Cuántos registros traigo como máximo
+    db: Session = Depends(get_db),  # Sesión de la base de datos
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
+):
+    # Solo el encargado puede entrar
+    verificar_rol(usuario_actual, ["encargado"])
+    # Traigo los materiales activos o inactivos según el filtro
+    consulta = db.query(Material).filter(Material.activo == activo)
+    # Si mandaron algo para buscar
+    if buscar:
+        # Busco en el nombre o en el código de barras
+        consulta = consulta.filter((Material.nombre.ilike(f"%{buscar}%")) | (Material.codigo_barras.ilike(f"%{buscar}%")))
+    # Si mandaron categoría
+    if categoria:
+        # Filtro por categoría
+        consulta = consulta.filter(Material.categoria == categoria)
+    # Traigo todos los materiales ordenados por nombre
+    materiales = consulta.order_by(Material.nombre).all()
+    # Aquí voy a guardar los materiales convertidos
+    lista = []
+    # Recorro los materiales
+    for material in materiales:
+        # Convierto el material
+        material_convertido = convertir_material(material)
+        # Si no mandaron estado, o si el estado es el que pidieron
+        if estado is None or material_convertido["estado_stock"] == estado:
+            # Lo agrego a la lista
+            lista.append(material_convertido)
+    # Devuelvo solo la página que pidieron
+    return lista[skip:skip + limit]
 
 
-# Endpoint POST /api/v1/inventario/movimientos
-@router.post(
-    "/movimientos",  # Ruta
-    response_model=MovimientoSalida,  # Respuesta: el movimiento creado
-    status_code=status.HTTP_201_CREATED,  # Código 201
-    summary="Registrar entrada, salida o merma (RF36, RF37)",  # Título
-    description=(  # Explicación
-        "Proceso de negocio. Actualiza el stock y crea la fila del kardex en una sola transacción. Una salida "
-        "o merma no puede dejar el stock negativo (400). En una merma el concepto es la razón.\n\n"
-        "**Rol requerido:** encargado."
-    ),
-    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores posibles
-)
-# Recibe el cuerpo, el servicio y el encargado
-def registrar_movimiento(datos: MovimientoCrear, servicio: Servicio, encargado: Encargado):
-    # Registra y devuelve el movimiento
-    return servicio.registrar_movimiento(datos, encargado)
+# Ruta para ver un material por su id (solo el encargado)
+@router.get("/materiales/{material_id}")
+def ver_material(material_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Solo el encargado puede entrar
+    verificar_rol(usuario_actual, ["encargado"])
+    # Busco el material
+    material = db.query(Material).filter(Material.id == material_id).first()
+    # Si no existe
+    if material is None:
+        # Respondo 404
+        raise HTTPException(status_code=404, detail="El material no existe")
+    # Devuelvo el material
+    return convertir_material(material)
 
 
-# Endpoint GET /api/v1/inventario/kardex
-@router.get(
-    "/kardex",  # Ruta
-    response_model=Pagina[MovimientoSalida],  # Respuesta: página de movimientos
-    summary="Kardex e historial de mermas (RF35, RF38)",  # Título
-    description=(  # Explicación
-        "Movimientos con responsable, entrada, salida y saldo final. Filtros por material, tipo (use "
-        "tipo=MERMA para el historial de mermas) y rango de fechas.\n\n**Rol requerido:** encargado."
-    ),
-    responses=respuestas_error(401, 403, 422),  # Errores posibles
-)
-# Filtros en la URL; solo el encargado
-def kardex(filtros: Annotated[FiltrosKardex, Query()], servicio: Servicio, _: Encargado):
-    # Devuelve la página del kardex
-    return servicio.kardex(filtros)
+# Ruta para crear un material (solo el encargado)
+@router.post("/materiales", status_code=201)
+def crear_material(datos: MaterialCrear, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Solo el encargado puede crear materiales
+    verificar_rol(usuario_actual, ["encargado"])
+    # El código de barras solo puede tener números
+    if not datos.codigo_barras.isdigit():
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="El código de barras solo puede tener números")
+    # La categoría tiene que estar en la lista
+    if datos.categoria not in CATEGORIAS:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La categoría no es válida")
+    # La unidad tiene que estar en la lista
+    if datos.unidad_medida not in UNIDADES:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La unidad de medida debe ser KG, G, L, ML o UND")
+    # Si mandaron fecha de vencimiento y ya pasó
+    if datos.fecha_vencimiento is not None and datos.fecha_vencimiento < date.today():
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="La fecha de vencimiento no puede ser de un día que ya pasó")
+    # Busco si ya hay un material con ese código
+    existe = db.query(Material).filter(Material.codigo_barras == datos.codigo_barras).first()
+    # Si ya existe
+    if existe is not None:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="Ya existe un material con ese código de barras")
+    # Creo el material
+    nuevo_material = Material(
+        codigo_barras=datos.codigo_barras,  # Código de barras
+        nombre=datos.nombre,  # Nombre
+        categoria=datos.categoria,  # Categoría
+        unidad_medida=datos.unidad_medida,  # Unidad
+        costo_unitario=datos.costo_unitario,  # Costo
+        stock=datos.stock_inicial,  # Empieza con el stock inicial
+        stock_minimo=datos.stock_minimo,  # Stock mínimo
+        fecha_vencimiento=datos.fecha_vencimiento,  # Vencimiento
+    )
+    # Lo agrego a la sesión
+    db.add(nuevo_material)
+    # Lo guardo en la base de datos
+    db.commit()
+    # Lo vuelvo a leer para tener el id
+    db.refresh(nuevo_material)
+    # Si empezó con stock, guardo una entrada en el kardex
+    if datos.stock_inicial > 0:
+        # Creo el movimiento de entrada
+        movimiento = MovimientoInventario(
+            material_id=nuevo_material.id,  # Material
+            usuario_id=usuario_actual.id,  # Quién lo hizo
+            tipo="ENTRADA",  # Es una entrada
+            cantidad=datos.stock_inicial,  # Lo que entró
+            saldo=datos.stock_inicial,  # Lo que quedó
+            concepto="Stock inicial",  # Por qué
+        )
+        # Lo agrego a la sesión
+        db.add(movimiento)
+        # Lo guardo
+        db.commit()
+    # Devuelvo el material
+    return convertir_material(nuevo_material)
+
+
+# Ruta para actualizar un material (el stock no se cambia aquí)
+@router.put("/materiales/{material_id}")
+def actualizar_material(material_id: int, datos: MaterialActualizar, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Solo el encargado puede actualizar materiales
+    verificar_rol(usuario_actual, ["encargado"])
+    # Busco el material
+    material = db.query(Material).filter(Material.id == material_id).first()
+    # Si no existe
+    if material is None:
+        # Respondo 404
+        raise HTTPException(status_code=404, detail="El material no existe")
+    # Si está inactivo
+    if material.activo == False:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="El material está inactivo")
+    # Si mandaron nombre
+    if datos.nombre is not None:
+        # Cambio el nombre
+        material.nombre = datos.nombre
+    # Si mandaron categoría
+    if datos.categoria is not None:
+        # Reviso que la categoría esté en la lista
+        if datos.categoria not in CATEGORIAS:
+            # Respondo 400
+            raise HTTPException(status_code=400, detail="La categoría no es válida")
+        # Cambio la categoría
+        material.categoria = datos.categoria
+    # Si mandaron costo
+    if datos.costo_unitario is not None:
+        # Cambio el costo
+        material.costo_unitario = datos.costo_unitario
+    # Si mandaron stock mínimo
+    if datos.stock_minimo is not None:
+        # Cambio el stock mínimo
+        material.stock_minimo = datos.stock_minimo
+    # Si mandaron fecha de vencimiento
+    if datos.fecha_vencimiento is not None:
+        # Reviso que no sea de un día que ya pasó
+        if datos.fecha_vencimiento < date.today():
+            # Respondo 400
+            raise HTTPException(status_code=400, detail="La fecha de vencimiento no puede ser de un día que ya pasó")
+        # Cambio la fecha
+        material.fecha_vencimiento = datos.fecha_vencimiento
+    # Guardo los cambios
+    db.commit()
+    # Vuelvo a leer el material
+    db.refresh(material)
+    # Devuelvo el material
+    return convertir_material(material)
+
+
+# Ruta para eliminar un material (solo el encargado)
+@router.delete("/materiales/{material_id}")
+def eliminar_material(material_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Solo el encargado puede eliminar materiales
+    verificar_rol(usuario_actual, ["encargado"])
+    # Busco el material
+    material = db.query(Material).filter(Material.id == material_id).first()
+    # Si no existe
+    if material is None:
+        # Respondo 404
+        raise HTTPException(status_code=404, detail="El material no existe")
+    # Si ya está inactivo
+    if material.activo == False:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="El material ya está inactivo")
+    # Busco en qué recetas se usa el material
+    ingredientes = db.query(RecetaIngrediente).filter(RecetaIngrediente.material_id == material_id).all()
+    # Recorro esos ingredientes
+    for ingrediente in ingredientes:
+        # Busco la receta del ingrediente
+        receta = db.query(Receta).filter(Receta.id == ingrediente.receta_id).first()
+        # Si la receta está activa no se puede eliminar el material
+        if receta.activo == True:
+            # Respondo 400
+            raise HTTPException(status_code=400, detail="No se puede eliminar porque lo usa la receta " + receta.nombre)
+    # Cuento los movimientos del material
+    cantidad_movimientos = db.query(MovimientoInventario).filter(MovimientoInventario.material_id == material_id).count()
+    # Si tiene movimientos o está en alguna receta no lo puedo borrar
+    if cantidad_movimientos > 0 or len(ingredientes) > 0:
+        # Solo lo desactivo (borrado lógico)
+        material.activo = False
+        # Guardo los cambios
+        db.commit()
+        # Respondo con un mensaje
+        return {"mensaje": "El material tiene historial, por eso solo se desactivó"}
+    # Si no tiene historial lo borro de verdad
+    db.delete(material)
+    # Guardo los cambios
+    db.commit()
+    # Respondo con un mensaje
+    return {"mensaje": "El material se eliminó"}
+
+
+# Ruta para hacer una entrada, salida o merma (solo el encargado)
+@router.post("/movimientos", status_code=201)
+def registrar_movimiento(datos: MovimientoCrear, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+    # Solo el encargado puede hacer movimientos
+    verificar_rol(usuario_actual, ["encargado"])
+    # Reviso que el tipo sea válido
+    if datos.tipo not in TIPOS_MOVIMIENTO:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="El tipo debe ser ENTRADA, SALIDA o MERMA")
+    # Busco el material
+    material = db.query(Material).filter(Material.id == datos.material_id).first()
+    # Si no existe
+    if material is None:
+        # Respondo 404
+        raise HTTPException(status_code=404, detail="El material no existe")
+    # Si está inactivo
+    if material.activo == False:
+        # Respondo 400
+        raise HTTPException(status_code=400, detail="El material está inactivo")
+    # Si es una entrada
+    if datos.tipo == "ENTRADA":
+        # Sumo la cantidad al stock
+        nuevo_stock = material.stock + datos.cantidad
+    # Si es salida o merma
+    else:
+        # No puede sacar más de lo que hay
+        if datos.cantidad > material.stock:
+            # Respondo 400
+            raise HTTPException(status_code=400, detail="No hay suficiente stock de " + material.nombre + ", solo hay " + str(material.stock))
+        # Resto la cantidad del stock
+        nuevo_stock = material.stock - datos.cantidad
+    # Redondeo a 3 decimales para que no salgan números raros
+    nuevo_stock = round(nuevo_stock, 3)
+    # Cambio el stock del material
+    material.stock = nuevo_stock
+    # Creo el movimiento para el kardex
+    movimiento = MovimientoInventario(
+        material_id=material.id,  # Material
+        usuario_id=usuario_actual.id,  # Quién lo hizo
+        tipo=datos.tipo,  # Tipo
+        cantidad=datos.cantidad,  # Cantidad
+        saldo=nuevo_stock,  # Lo que quedó
+        concepto=datos.concepto,  # Por qué
+    )
+    # Lo agrego a la sesión
+    db.add(movimiento)
+    # Guardo el movimiento y el stock nuevo al mismo tiempo
+    db.commit()
+    # Vuelvo a leer el movimiento
+    db.refresh(movimiento)
+    # Devuelvo el movimiento
+    return convertir_movimiento(movimiento)
+
+
+# Ruta para ver el kardex (historial de movimientos)
+@router.get("/kardex")
+def ver_kardex(
+    material_id: Optional[int] = None,  # Filtrar por material
+    tipo: Optional[str] = None,  # Filtrar por tipo (por ejemplo MERMA)
+    skip: int = 0,  # Cuántos registros me salto
+    limit: int = 100,  # Cuántos registros traigo como máximo
+    db: Session = Depends(get_db),  # Sesión de la base de datos
+    usuario_actual: Usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
+):
+    # Solo el encargado puede entrar
+    verificar_rol(usuario_actual, ["encargado"])
+    # Empiezo con todos los movimientos
+    consulta = db.query(MovimientoInventario)
+    # Si mandaron material
+    if material_id is not None:
+        # Filtro por material
+        consulta = consulta.filter(MovimientoInventario.material_id == material_id)
+    # Si mandaron tipo
+    if tipo is not None:
+        # Filtro por tipo
+        consulta = consulta.filter(MovimientoInventario.tipo == tipo)
+    # Ordeno del más nuevo al más viejo y pagino
+    movimientos = consulta.order_by(MovimientoInventario.fecha.desc(), MovimientoInventario.id.desc()).offset(skip).limit(limit).all()
+    # Aquí voy a guardar los movimientos convertidos
+    lista = []
+    # Recorro los movimientos
+    for movimiento in movimientos:
+        # Agrego cada movimiento convertido
+        lista.append(convertir_movimiento(movimiento))
+    # Devuelvo la lista
+    return lista

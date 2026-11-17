@@ -1,24 +1,23 @@
-# Librerías que necesita la API. Se instalan con:  python -m pip install -r requirements.txt
-# ">=" significa "esta versión o una más nueva"
+# Librerías que necesita el proyecto
+# Se instalan todas con este comando: pip install -r requirements.txt
 
-# Framework web con el que se construye la API (rutas, validación y Swagger)
-fastapi>=0.115
-# Sin [standard]: con Python 3.15 ese extra exige compilar pyyaml (Visual C++).
-# Servidor que ejecuta la API (uvicorn app.main:app --reload)
-uvicorn>=0.30
-# ORM: permite trabajar con las tablas de PostgreSQL como clases de Python
-sqlalchemy>=2.0
-# Driver que conecta Python con PostgreSQL ([binary] trae todo compilado)
-psycopg[binary]>=3.2
-# Validación de datos con esquemas; [email] agrega el validador de correos
-pydantic[email]>=2.8
-# Lee las variables del archivo .env
-pydantic-settings>=2.4
-# Crea y valida los tokens JWT
-PyJWT>=2.9
-# Cifra las contraseñas
-bcrypt>=4.2
-# Herramienta para ejecutar las pruebas automáticas (pytest -v)
-pytest>=8.3
-# Cliente HTTP que usa el TestClient de FastAPI en las pruebas
-httpx>=0.27
+# FastAPI es el framework con el que se hace la API
+fastapi
+# uvicorn es el servidor que pone a correr la API
+uvicorn
+# SQLAlchemy sirve para trabajar con la base de datos usando clases de Python
+sqlalchemy
+# psycopg es el conector entre Python y PostgreSQL
+psycopg[binary]
+# pydantic valida los datos que llegan (el [email] es para poder validar correos)
+pydantic[email]
+# python-dotenv sirve para leer el archivo .env
+python-dotenv
+# PyJWT sirve para crear y leer los tokens JWT
+PyJWT
+# bcrypt sirve para encriptar las contraseñas
+bcrypt
+# pytest sirve para hacer las pruebas automáticas
+pytest
+# httpx lo necesita el TestClient que se usa en las pruebas
+httpx
