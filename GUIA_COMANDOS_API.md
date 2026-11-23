@@ -2,6 +2,23 @@
 
 API REST de reservas de almuerzos del SENA Tecnoparque Yamboró. Python + FastAPI + PostgreSQL (esquema `gastrosena`). Todos los endpoints de módulos empiezan con `/api/v1`.
 
+## Carpetas clave del código (subrayadas)
+
+Estas son las carpetas que hacen funcionar la API; si falta alguna, no arranca o no responde.
+
+- **<u>app/</u>** — código fuente principal.
+  - **<u>app/main.py</u>** (archivo) — crea la aplicación, engancha los 10 routers bajo `/api/v1` y revisa la auditoría al arrancar.
+  - **<u>app/routers/</u>** — los 53 endpoints; reciben la petición y revisan el rol.
+  - **<u>app/services/</u>** — las reglas del negocio: precios, cupos, stock, deudas y horarios.
+  - **<u>app/repositories/</u>** — las consultas reales a PostgreSQL.
+  - **<u>app/models/</u>** — las tablas de SQLAlchemy.
+  - **<u>app/schemas/</u>** — validación del JSON que entra y sale.
+  - **<u>app/core/</u>** — configuración, JWT, contraseñas, permisos, errores y horario de reservas.
+  - **<u>app/database/</u>** — conexión, sesiones y auditoría; `obtener_bd()` se usa en cada petición.
+- **<u>database/</u>** — scripts SQL (tablas, datos de prueba, usuario y auditoría); sin ellos no hay base de datos.
+- **<u>tests/</u>** — 59 pruebas automáticas que validan cada módulo.
+- **<u>docs/</u>** — colección de Postman y documento de requisitos (apoyo, no ejecución).
+
 Todo lo de abajo se ejecuta en **PowerShell**, desde la raíz del proyecto:
 
 ```powershell
