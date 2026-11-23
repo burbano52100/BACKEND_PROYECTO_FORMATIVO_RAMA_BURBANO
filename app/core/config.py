@@ -10,34 +10,34 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Servidor de la base de datos
-DB_HOST = os.getenv("DB_HOST", "localhost")
+bd_servidor = os.getenv("bd_servidor", "localhost")
 # Puerto de la base de datos
-DB_PORT = os.getenv("DB_PORT", "5432")
+bd_puerto = os.getenv("bd_puerto", "5432")
 # Nombre de la base de datos
-DB_NAME = os.getenv("DB_NAME", "gastrosena_db")
+bd_nombre = os.getenv("bd_nombre", "gastrosena_db")
 # Usuario de la base de datos
-DB_USER = os.getenv("DB_USER", "api_gastrosena")
+bd_usuario = os.getenv("bd_usuario", "api_gastrosena")
 # Contraseña de la base de datos
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+bd_contrasena = os.getenv("bd_contrasena", "")
 
 # Clave secreta con la que se firman los tokens
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+clave_secreta = os.getenv("clave_secreta_jwt")
 # Si no pusieron la clave en el .env no dejo que arranque la API
-if SECRET_KEY is None:
+if clave_secreta is None:
     # Muestro un error para que se den cuenta de lo que falta
-    raise Exception("Falta poner JWT_SECRET_KEY en el archivo .env")
+    raise Exception("Falta poner clave_secreta_jwt en el archivo .env")
 
 # Algoritmo con el que se firman los tokens
-ALGORITHM = "HS256"
+algoritmo = "HS256"
 # Minutos que dura el token de acceso (int lo convierte de texto a número)
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-# Días que dura el refresh token
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
+minutos_token_acceso = int(os.getenv("minutos_token_acceso", "30"))
+# Días que dura el token para renovar
+dias_token_renovar = int(os.getenv("dias_token_renovar", "7"))
 
 # Páginas web que pueden llamar a la API (split las separa por las comas y queda una lista)
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
+origenes_cors = os.getenv("origenes_cors", "http://localhost:5173").split(",")
 
 # Hora desde la que se puede reservar (7 de la mañana)
-HORA_APERTURA = int(os.getenv("HORA_APERTURA", "7"))
+hora_apertura = int(os.getenv("hora_apertura", "7"))
 # Hora hasta la que se puede reservar (9 de la noche)
-HORA_CIERRE = int(os.getenv("HORA_CIERRE", "21"))
+hora_cierre = int(os.getenv("hora_cierre", "21"))

@@ -40,6 +40,12 @@ CREATE TABLE fichas (
     cantidad_estudiantes INTEGER NOT NULL DEFAULT 0 CHECK (cantidad_estudiantes >= 0 AND cantidad_estudiantes <= 60),
     -- Si la ficha está activa
     activo BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se creó, se pone sola con la fecha de ahora
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -58,7 +64,7 @@ CREATE TABLE usuarios (
     -- Teléfono (puede quedar vacío)
     telefono VARCHAR(10),
     -- Contraseña encriptada con bcrypt
-    password VARCHAR(100) NOT NULL,
+    contrasena VARCHAR(100) NOT NULL,
     -- Rol del usuario (llave foránea a roles)
     rol_id INTEGER NOT NULL REFERENCES roles(id),
     -- Ficha del usuario, solo para aprendices (llave foránea a fichas)
@@ -71,6 +77,12 @@ CREATE TABLE usuarios (
     intentos_fallidos INTEGER NOT NULL DEFAULT 0,
     -- Hasta cuándo está bloqueada la cuenta
     bloqueado_hasta TIMESTAMP,
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se creó
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -96,6 +108,12 @@ CREATE TABLE menus (
     cantidad_disponible INTEGER NOT NULL CHECK (cantidad_disponible >= 0),
     -- Si el menú está activo
     activo BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se creó
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -115,6 +133,12 @@ CREATE TABLE reservas (
     valor NUMERIC(10,2) NOT NULL CHECK (valor >= 0),
     -- Estado de la reserva
     estado VARCHAR(15) NOT NULL DEFAULT 'RESERVADO' CHECK (estado IN ('RESERVADO', 'PENDIENTE', 'PAGADO', 'NO_PAGADO', 'CANCELADA')),
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se hizo
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -132,6 +156,12 @@ CREATE TABLE pagos_instructor (
     metodo VARCHAR(15) NOT NULL CHECK (metodo IN ('EFECTIVO', 'TRANSFERENCIA', 'NOMINA')),
     -- Nota del pago
     observacion VARCHAR(255),
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha del pago
     fecha_pago TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -159,6 +189,12 @@ CREATE TABLE materiales (
     fecha_vencimiento DATE,
     -- Si el material está activo
     activo BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se creó
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -197,6 +233,12 @@ CREATE TABLE recetas (
     precio_venta NUMERIC(10,2) NOT NULL CHECK (precio_venta > 0),
     -- Si la receta está activa
     activo BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se creó
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -231,6 +273,12 @@ CREATE TABLE sugerencias (
     estado VARCHAR(10) NOT NULL DEFAULT 'PENDIENTE' CHECK (estado IN ('PENDIENTE', 'ATENDIDA')),
     -- Respuesta del encargado
     respuesta VARCHAR(500),
+    -- Auditoría: id del usuario que creó el registro (la API lo pone sola)
+    creado_por INTEGER,
+    -- Auditoría: id del usuario que lo modificó por última vez
+    modificado_por INTEGER,
+    -- Auditoría: fecha y hora de la última modificación
+    fecha_modificacion TIMESTAMP,
     -- Fecha en que se mandó
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     -- Fecha en que se respondió
@@ -249,3 +297,30 @@ CREATE INDEX idx_reservas_menu ON reservas(menu_id);
 CREATE INDEX idx_movimientos_material ON movimientos_inventario(material_id);
 -- Índice para buscar los ingredientes de una receta
 CREATE INDEX idx_ingredientes_receta ON receta_ingredientes(receta_id);
+
+-- Llaves foráneas de la auditoría: creado_por y modificado_por apuntan a la tabla usuarios
+-- Se agregan al final porque la tabla fichas se crea antes que la tabla usuarios
+-- Auditoría de fichas
+ALTER TABLE fichas ADD CONSTRAINT fk_fichas_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE fichas ADD CONSTRAINT fk_fichas_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de usuarios
+ALTER TABLE usuarios ADD CONSTRAINT fk_usuarios_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE usuarios ADD CONSTRAINT fk_usuarios_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de menus
+ALTER TABLE menus ADD CONSTRAINT fk_menus_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE menus ADD CONSTRAINT fk_menus_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de reservas
+ALTER TABLE reservas ADD CONSTRAINT fk_reservas_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE reservas ADD CONSTRAINT fk_reservas_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de pagos_instructor
+ALTER TABLE pagos_instructor ADD CONSTRAINT fk_pagos_instructor_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE pagos_instructor ADD CONSTRAINT fk_pagos_instructor_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de materiales
+ALTER TABLE materiales ADD CONSTRAINT fk_materiales_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE materiales ADD CONSTRAINT fk_materiales_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de recetas
+ALTER TABLE recetas ADD CONSTRAINT fk_recetas_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE recetas ADD CONSTRAINT fk_recetas_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);
+-- Auditoría de sugerencias
+ALTER TABLE sugerencias ADD CONSTRAINT fk_sugerencias_creado_por FOREIGN KEY (creado_por) REFERENCES usuarios(id);
+ALTER TABLE sugerencias ADD CONSTRAINT fk_sugerencias_modificado_por FOREIGN KEY (modificado_por) REFERENCES usuarios(id);

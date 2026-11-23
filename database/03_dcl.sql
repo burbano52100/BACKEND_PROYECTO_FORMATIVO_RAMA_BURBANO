@@ -1,7 +1,7 @@
 -- Script para crear el usuario de la base de datos que usa la API
 -- La API no se conecta con postgres sino con este usuario que tiene menos permisos (es más seguro)
 -- Se ejecuta con el usuario postgres después de 01_ddl.sql y 02_dml.sql
--- OJO: la contraseña tiene que ser la misma que está en DB_PASSWORD del archivo .env
+-- OJO: la contraseña tiene que ser la misma que está en bd_contrasena del archivo .env
 
 -- Creo el usuario de la API (si ya existe sale un error en esta línea, pero no pasa nada)
 CREATE USER api_gastrosena WITH PASSWORD 'CambieEstaClave2026';

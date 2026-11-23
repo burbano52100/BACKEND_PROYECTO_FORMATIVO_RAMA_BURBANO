@@ -9,7 +9,7 @@ Actividad **EA4: Api Rest del proyecto formativo**.
 Antes las reservas de almuerzo, los cobros, lo que deben los instructores y el inventario de la cocina se
 llevaban a mano. Con esta API todo queda guardado en PostgreSQL y se puede consultar según el rol de cada persona.
 
-- **Login** con correo y contraseña. Devuelve un token JWT.
+- **Inicio de sesión** con correo y contraseña. Devuelve un token JWT.
 - **Usuarios**: el encargado crea las cuentas, les pone el rol y marca a los aprendices beneficiarios (almuerzo gratis).
 - **Fichas**: los grupos de los aprendices, con estadísticas de cuántos reservaron.
 - **Menú del día**: el encargado crea un menú por día con su precio y cantidad de almuerzos.
@@ -37,33 +37,49 @@ llevaban a mano. Con esta API todo queda guardado en PostgreSQL y se puede consu
 ```
 api_proyecto_formativo/
 ├── app/
-│   ├── main.py          # Archivo principal, aquí se crea la API
-│   ├── config.py        # Lee las variables del archivo .env
-│   ├── database.py      # Conexión con PostgreSQL
-│   ├── models.py        # Las tablas de la base de datos
-│   ├── schemas.py       # Validación de los datos que llegan
-│   ├── seguridad.py     # Contraseñas, tokens y permisos
-│   └── routers/         # Las rutas de cada módulo
-│       ├── auth.py
-│       ├── usuarios.py
-│       ├── fichas.py
-│       ├── menus.py
-│       ├── reservas.py
-│       ├── cartera.py
-│       ├── inventario.py
-│       ├── recetas.py
-│       ├── sugerencias.py
-│       └── reportes.py
+│   ├── main.py              # Archivo principal, aquí se crea la API
+│   ├── core/                # Cosas generales que usan todos los módulos
+│   │   ├── config.py        # Lee las variables del archivo .env
+│   │   ├── seguridad.py     # Contraseñas y tokens
+│   │   ├── permisos.py      # Saber quién hace la petición y revisar su rol
+│   │   ├── roles.py         # Listas de roles para los permisos
+│   │   ├── excepciones.py   # Funciones para responder los errores (400, 401, 403, 404)
+│   │   ├── errores.py       # Pone todos los errores en español con la forma {"detalle": ...}
+│   │   └── tiempo.py        # Horario para reservar
+│   ├── database/
+│   │   └── conexion.py      # Conexión con PostgreSQL y funciones para buscar, guardar y borrar
+│   ├── models/              # Las tablas de la base de datos (un archivo por módulo)
+│   ├── schemas/             # Validación de los datos que llegan y que se responden
+│   ├── repositories/        # Las consultas a la base de datos
+│   ├── services/            # Las reglas del negocio
+│   └── routers/             # Las rutas (endpoints) de cada módulo
 ├── database/
-│   ├── 01_ddl.sql       # Crea las tablas
-│   ├── 02_dml.sql       # Datos de prueba
-│   └── 03_dcl.sql       # Usuario y permisos de la base de datos
-├── docs/                # Documento de requisitos y colección de Postman
-├── tests/               # Pruebas con pytest
+│   ├── 01_ddl.sql           # Crea las tablas
+│   ├── 02_dml.sql           # Datos de prueba
+│   ├── 03_dcl.sql           # Usuario y permisos de la base de datos
+│   └── 04_auditoria.sql     # Solo si la base ya existía: le agrega las columnas de auditoría
+├── docs/                    # Documento de requisitos y colección de Postman
+├── tests/                   # Pruebas con pytest
+├── pytest.ini               # Le dice a pytest que las funciones de prueba empiezan con prueba_
 ├── requirements.txt
 ├── .env.example
 └── README.md
 ```
+
+Cada módulo (usuarios, fichas, menús, reservas, cartera, inventario, recetas, sugerencias y reportes)
+tiene su archivo en cada carpeta. Una petición pasa así:
+
+`routers` (revisa el rol) → `services` (revisa las reglas) → `repositories` (consulta la base de datos)
+
+## Nombres en el código
+
+- Las carpetas y los archivos tienen los nombres de la estructura original (`app`, `core`, `models`, `services`...).
+- Las clases, funciones y variables están en español y en minúsculas, igual que las rutas y los campos del JSON.
+- Los modelos (tablas) empiezan con `modelo_`, por ejemplo `modelo_usuario`, para que no se confundan con las variables.
+- Los esquemas se llaman por lo que hacen, por ejemplo `usuario_crear` o `menu_respuesta`.
+- Las variables del archivo `.env` también están en minúsculas, por ejemplo `bd_contrasena` o `clave_secreta_jwt`.
+- Solo quedan en inglés los nombres que vienen de las librerías (`FastAPI`, `Column`, `BaseModel`, `HTTPException`...)
+  y los que Python o pytest exigen así (`__init__.py`, `conftest.py`, `__tablename__`, `model_config`).
 
 ## Cómo instalarlo (Windows)
 
@@ -85,18 +101,24 @@ api_proyecto_formativo/
    También se puede hacer en pgAdmin abriendo cada archivo en el Query Tool.
    Si el usuario `api_gastrosena` ya existía, el `03_dcl.sql` muestra un error en el `CREATE USER`, pero los permisos sí se dan.
 
+   **¿Ya tenía la base creada de antes?** Si la base se creó antes de que existieran las columnas de auditoría, no hay que borrarla:
+   basta con ejecutar `database\04_auditoria.sql`, que solo agrega las columnas que faltan (se puede ejecutar varias veces).
+   ```powershell
+   & $psql -U postgres -d gastrosena_db -f database\04_auditoria.sql
+   ```
+
 3. Copiar el archivo `.env.example`, ponerle de nombre `.env` y llenar los datos.
-   En `JWT_SECRET_KEY` hay que poner una clave larga. Se puede sacar con:
+   En `clave_secreta_jwt` hay que poner una clave larga. Se puede sacar con:
    ```powershell
    python -c "import secrets; print(secrets.token_hex(32))"
    ```
 
 4. Correr la API:
    ```powershell
-   uvicorn app.main:app --reload
+   uvicorn app.main:aplicacion --reload
    ```
 
-5. Abrir **http://localhost:8000/docs**, hacer login en `POST /api/v1/auth/login`, copiar el `access_token`
+5. Abrir **http://localhost:8000/docs**, iniciar sesión en `POST /api/v1/autenticacion/ingresar`, copiar el `token_acceso`
    y pegarlo en el botón **Authorize**.
 
 ## Usuarios de prueba
@@ -123,16 +145,16 @@ Si no se manda el token la API responde **401** y si el rol no tiene permiso res
 
 ## Endpoints
 
-Todas las rutas empiezan con `/api/v1`. Todas necesitan token menos el login y el refresh.
+Todas las rutas empiezan con `/api/v1`. Todas necesitan token menos ingresar y renovar.
 
 | Método | Ruta | Qué hace | Quién |
 |---|---|---|---|
-| POST | /auth/login | Iniciar sesión | todos |
-| POST | /auth/refresh | Pedir tokens nuevos | todos |
-| GET | /auth/perfil | Ver mi perfil | todos |
-| PUT | /auth/password | Cambiar mi contraseña | todos |
+| POST | /autenticacion/ingresar | Iniciar sesión | todos |
+| POST | /autenticacion/renovar | Pedir tokens nuevos | todos |
+| GET | /autenticacion/perfil | Ver mi perfil | todos |
+| PUT | /autenticacion/contrasena | Cambiar mi contraseña | todos |
 | GET | /roles | Ver los roles | encargado |
-| GET | /usuarios | Ver los usuarios (filtros: buscar, rol_id, activo, skip, limit) | encargado |
+| GET | /usuarios | Ver los usuarios (filtros: buscar, rol_id, activo, saltar, limite) | encargado |
 | GET | /usuarios/{id} | Ver un usuario | encargado |
 | POST | /usuarios | Crear un usuario | encargado |
 | PUT | /usuarios/{id} | Actualizar un usuario | encargado |
@@ -181,7 +203,24 @@ Todas las rutas empiezan con `/api/v1`. Todas necesitan token menos el login y e
 | GET | /reportes/ventas | Ventas por periodo (dia, semana, mes, anio) | encargado |
 | GET | /reportes/indicadores | Indicadores de hoy | encargado |
 
-Los errores salen así: `{"detail": "El menú no existe"}`
+Todos los errores salen con la misma forma: `{"detalle": "El menú no existe"}`. Si los datos que se mandan no son válidos sale el error 422 con la lista de campos malos, por ejemplo `{"detalle": ["Falta el campo contrasena"]}`.
+
+| Código | Cuándo sale |
+|---|---|
+| 400 | No se cumple una regla del negocio (por ejemplo, reservar un menú agotado) |
+| 401 | No mandaron el token, es falso o ya se venció |
+| 403 | El rol no tiene permiso, o la cuenta está bloqueada o inactiva al iniciar sesión |
+| 404 | El registro no existe |
+| 409 | Ya existe un registro con un valor que no se puede repetir (correo, documento, código de la ficha, menú del día, código de barras, nombre de la receta o una segunda reserva del mismo menú) |
+| 422 | Los datos que llegaron no son válidos (falta un campo, el tipo está mal, el correo no tiene formato, un precio es negativo...) |
+| 500 | Error interno. Al usuario solo le sale "Ocurrió un error interno, intente más tarde"; el detalle técnico queda en la consola del servidor |
+
+En **/docs** cada ruta dice qué hace, qué rol necesita y qué errores puede responder.
+
+## Auditoría
+
+Las tablas principales (usuarios, fichas, menús, reservas, pagos, materiales, recetas y sugerencias) guardan **quién creó el registro** (`creado_por`), **cuándo** (`fecha_creacion` o `fecha_pago`), **quién lo modificó por última vez** (`modificado_por`) y **cuándo** (`fecha_modificacion`).
+No hay que hacer nada en cada servicio: `core/permisos.py` guarda en la sesión el id de quien hace la petición y la función `poner_auditoria` de `database/conexion.py` llena esas columnas antes de guardar. Los movimientos del kardex guardan el usuario en `usuario_id`.
 
 ## Reglas del negocio
 
@@ -201,12 +240,15 @@ Los errores salen así: `{"detail": "El menú no existe"}`
 
 ## Pruebas
 
-- **pytest**: hay 54 pruebas en la carpeta `tests`. Crean datos, entonces es mejor correrlas con una base de datos de prueba.
+- **pytest**: hay 59 pruebas en la carpeta `tests` (incluye la auditoría, los errores 409 y 500 y que cada ruta esté documentada). Crean datos, entonces es mejor correrlas con una base de datos de prueba.
   ```powershell
   pytest -v
   ```
-- **Postman**: importar `docs/GastroSENA_API.postman_collection.json` y correrla con el Collection Runner.
-  Los logins guardan los tokens solos en las variables.
+- **Postman**: importar `docs/GastroSENA_API.postman_collection.json` y correrla con el Collection Runner (89 peticiones).
+  Las peticiones de iniciar sesión guardan los tokens solas en las variables.
+  Trae casos que salen bien y casos que fallan a propósito: datos inválidos (422), registros repetidos (409), registros que no existen (404),
+  sin token o con token vencido (401), rol sin permiso (403) y las reglas del negocio (400).
+  También se puede correr desde la consola con Newman: `newman run docs/GastroSENA_API.postman_collection.json`
 
 ## Integrantes
 
@@ -215,9 +257,9 @@ Equipo **"Los Extraditables"**:
 | Nombre | Rol en el equipo |
 |---|---|
 | Breyner Julián Calderón Garcés | Desarrollador del sistema |
+| Johan Sebastián Burbano Vargas | Responsable de la API |
 | | Líder del proyecto |
 | | Responsable de base de datos |
-| | Responsable de la API |
 | | Responsable de pruebas |
 | | Responsable de documentación |
 

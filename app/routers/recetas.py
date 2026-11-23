@@ -1,257 +1,117 @@
-# Rutas de las recetas: los platos, sus ingredientes y lo que cuesta hacerlos
+# Rutas de las recetas con su costo de producción (solo el encargado)
 
 # Optional quiere decir que un parámetro puede venir vacío
 from typing import Optional
 
-# APIRouter agrupa las rutas, Depends es para dependencias y HTTPException para los errores
-from fastapi import APIRouter, Depends, HTTPException
+# APIRouter agrupa las rutas y Depends es para dependencias
+from fastapi import APIRouter, Depends
 # Session es el tipo de la sesión de la base de datos
 from sqlalchemy.orm import Session
 
 # Función que da la sesión de la base de datos
-from app.database import get_db
-# Modelos que uso
-from app.models import Receta, RecetaIngrediente, Material, Usuario
+from app.database.conexion import obtener_bd
+# Modelo de usuario
+from app.models.usuario import modelo_usuario
+# Funciones de permisos
+from app.core.permisos import obtener_usuario_actual, verificar_rol
+# Lista de roles que pueden entrar
+from app.core.roles import solo_encargado
 # Esquemas que uso
-from app.schemas import RecetaCrear, RecetaActualizar
-# Funciones de seguridad
-from app.seguridad import obtener_usuario_actual, verificar_rol
+from app.schemas.receta import receta_crear, receta_actualizar
+# Esquema para responder un mensaje
+from app.schemas.comunes import mensaje_respuesta
+# Servicio con la lógica de las recetas
+from app.services import receta_service
 
-# Creo el router, todas las rutas empiezan con /recetas
-router = APIRouter(prefix="/recetas", tags=["Recetas"])
+# Función que documenta en /docs los errores que puede responder cada ruta
+from app.core.errores import respuestas_error
 
-
-# Función que arma la receta con sus ingredientes y calcula el costo y la ganancia
-def armar_receta(receta, db):
-    # Traigo los ingredientes de la receta
-    ingredientes = db.query(RecetaIngrediente).filter(RecetaIngrediente.receta_id == receta.id).order_by(RecetaIngrediente.id).all()
-    # Aquí voy a guardar los ingredientes con su costo
-    lista_ingredientes = []
-    # Aquí voy a sumar lo que cuesta hacer el plato
-    costo_produccion = 0
-    # Recorro los ingredientes
-    for ingrediente in ingredientes:
-        # El costo del ingrediente es la cantidad por el costo de una unidad
-        costo = round(ingrediente.cantidad * ingrediente.material.costo_unitario, 2)
-        # Lo sumo al costo del plato
-        costo_produccion = costo_produccion + costo
-        # Agrego el ingrediente a la lista
-        lista_ingredientes.append({
-            "material_id": ingrediente.material_id,  # Id del material
-            "nombre_material": ingrediente.material.nombre,  # Nombre del material
-            "unidad_medida": ingrediente.material.unidad_medida,  # Unidad
-            "cantidad": ingrediente.cantidad,  # Cuánto se usa
-            "costo_unitario": ingrediente.material.costo_unitario,  # Costo de una unidad
-            "costo": costo,  # Costo del ingrediente en el plato
-        })
-    # Redondeo el costo del plato
-    costo_produccion = round(costo_produccion, 2)
-    # La ganancia (margen) es el precio de venta menos el costo
-    margen = round(receta.precio_venta - costo_produccion, 2)
-    # El margen en porcentaje
-    margen_porcentaje = round(margen / receta.precio_venta * 100, 2)
-    # Devuelvo la receta completa
-    return {
-        "id": receta.id,  # Id de la receta
-        "nombre": receta.nombre,  # Nombre
-        "descripcion": receta.descripcion,  # Descripción
-        "precio_venta": receta.precio_venta,  # Precio de venta
-        "activo": receta.activo,  # Si está activa
-        "ingredientes": lista_ingredientes,  # Ingredientes
-        "costo_produccion": costo_produccion,  # Lo que cuesta hacer el plato
-        "margen": margen,  # La ganancia
-        "margen_porcentaje": margen_porcentaje,  # La ganancia en porcentaje
-        "alerta_margen_negativo": margen < 0,  # True si se pierde plata
-    }
+# Creo el enrutador, todas las rutas empiezan con /recetas
+enrutador = APIRouter(prefix="/recetas", tags=["Recetas"])
 
 
-# Función que revisa que los ingredientes estén bien
-def revisar_ingredientes(ingredientes, db):
-    # La receta tiene que tener al menos un ingrediente
-    if len(ingredientes) == 0:
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="La receta tiene que tener al menos un ingrediente")
-    # Aquí voy guardando los materiales que ya revisé
-    materiales_usados = []
-    # Recorro los ingredientes
-    for ingrediente in ingredientes:
-        # Si el material ya estaba en la lista
-        if ingrediente.material_id in materiales_usados:
-            # Respondo 400 porque no se puede repetir
-            raise HTTPException(status_code=400, detail="Un material no se puede repetir en la misma receta")
-        # Lo agrego a la lista de usados
-        materiales_usados.append(ingrediente.material_id)
-        # Busco el material
-        material = db.query(Material).filter(Material.id == ingrediente.material_id).first()
-        # Si no existe
-        if material is None:
-            # Respondo 404
-            raise HTTPException(status_code=404, detail="No existe el material con id " + str(ingrediente.material_id))
-        # Si está inactivo
-        if material.activo == False:
-            # Respondo 400
-            raise HTTPException(status_code=400, detail="El material " + material.nombre + " está inactivo")
-
-
-# Ruta para ver las recetas (solo el encargado)
-@router.get("")
+# Ruta para ver las recetas
+@enrutador.get(
+    "",
+    summary="Ver las recetas con su costo",  # Título corto que sale en /docs
+    description="Lista las recetas con el costo de prepararlas y el margen, con filtros y paginación. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403, 422),  # Errores que puede responder
+)
 def listar_recetas(
     buscar: Optional[str] = None,  # Buscar por nombre
     activo: bool = True,  # Por defecto muestro las activas
-    skip: int = 0,  # Cuántos registros me salto
-    limit: int = 100,  # Cuántos registros traigo como máximo
-    db: Session = Depends(get_db),  # Sesión de la base de datos
-    usuario_actual: Usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
+    saltar: int = 0,  # Cuántos registros me salto
+    limite: int = 100,  # Cuántos registros traigo como máximo
+    bd: Session = Depends(obtener_bd),  # Sesión de la base de datos
+    usuario_actual: modelo_usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
 ):
     # Solo el encargado puede entrar
-    verificar_rol(usuario_actual, ["encargado"])
-    # Traigo las recetas activas o inactivas según el filtro
-    consulta = db.query(Receta).filter(Receta.activo == activo)
-    # Si mandaron algo para buscar
-    if buscar:
-        # Busco por nombre
-        consulta = consulta.filter(Receta.nombre.ilike(f"%{buscar}%"))
-    # Ordeno por nombre y pagino
-    recetas = consulta.order_by(Receta.nombre).offset(skip).limit(limit).all()
-    # Aquí voy a guardar las recetas armadas
-    lista = []
-    # Recorro las recetas
-    for receta in recetas:
-        # Agrego cada receta con su costo
-        lista.append(armar_receta(receta, db))
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido la lista al servicio
+    lista = receta_service.listar_recetas(bd, buscar, activo, saltar, limite)
     # Devuelvo la lista
     return lista
 
 
-# Ruta para ver una receta por su id (solo el encargado)
-@router.get("/{receta_id}")
-def ver_receta(receta_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+# Ruta para ver una receta por su id
+@enrutador.get(
+    "/{receta_id}",
+    summary="Ver una receta",  # Título corto que sale en /docs
+    description="Muestra una receta con sus ingredientes, su costo y su margen. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403, 404, 422),  # Errores que puede responder
+)
+def ver_receta(receta_id: int, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede entrar
-    verificar_rol(usuario_actual, ["encargado"])
-    # Busco la receta
-    receta = db.query(Receta).filter(Receta.id == receta_id).first()
-    # Si no existe
-    if receta is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="La receta no existe")
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido la receta al servicio
+    receta = receta_service.ver_receta(bd, receta_id)
     # Devuelvo la receta con su costo
-    return armar_receta(receta, db)
+    return receta
 
 
-# Ruta para crear una receta (solo el encargado)
-@router.post("", status_code=201)
-def crear_receta(datos: RecetaCrear, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+# Ruta para crear una receta
+@enrutador.post(
+    "", status_code=201,
+    summary="Crear una receta",  # Título corto que sale en /docs
+    description="Registra una receta con sus ingredientes. El nombre no se puede repetir (409) y un material no se puede repetir en la misma receta. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 409, 422),  # Errores que puede responder
+)
+def crear_receta(datos: receta_crear, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede crear recetas
-    verificar_rol(usuario_actual, ["encargado"])
-    # Busco si ya hay una receta con ese nombre (ilike no tiene en cuenta mayúsculas)
-    existe = db.query(Receta).filter(Receta.nombre.ilike(datos.nombre)).first()
-    # Si ya existe
-    if existe is not None:
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="Ya existe una receta con ese nombre")
-    # Reviso los ingredientes
-    revisar_ingredientes(datos.ingredientes, db)
-    # Creo la receta
-    nueva_receta = Receta(
-        nombre=datos.nombre,  # Nombre
-        descripcion=datos.descripcion,  # Descripción
-        precio_venta=datos.precio_venta,  # Precio
-    )
-    # La agrego a la sesión
-    db.add(nueva_receta)
-    # La guardo
-    db.commit()
-    # La vuelvo a leer para tener el id
-    db.refresh(nueva_receta)
-    # Recorro los ingredientes que mandaron
-    for ingrediente in datos.ingredientes:
-        # Creo cada ingrediente
-        nuevo_ingrediente = RecetaIngrediente(
-            receta_id=nueva_receta.id,  # Receta
-            material_id=ingrediente.material_id,  # Material
-            cantidad=ingrediente.cantidad,  # Cantidad
-        )
-        # Lo agrego a la sesión
-        db.add(nuevo_ingrediente)
-    # Guardo los ingredientes
-    db.commit()
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que cree la receta
+    receta = receta_service.crear_receta(bd, datos)
     # Devuelvo la receta con su costo
-    return armar_receta(nueva_receta, db)
+    return receta
 
 
-# Ruta para actualizar una receta (solo el encargado)
-@router.put("/{receta_id}")
-def actualizar_receta(receta_id: int, datos: RecetaActualizar, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+# Ruta para actualizar una receta
+@enrutador.put(
+    "/{receta_id}",
+    summary="Actualizar una receta",  # Título corto que sale en /docs
+    description="Cambia los datos o los ingredientes de una receta. El nombre no se puede repetir (409). **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 409, 422),  # Errores que puede responder
+)
+def actualizar_receta(receta_id: int, datos: receta_actualizar, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede actualizar recetas
-    verificar_rol(usuario_actual, ["encargado"])
-    # Busco la receta
-    receta = db.query(Receta).filter(Receta.id == receta_id).first()
-    # Si no existe
-    if receta is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="La receta no existe")
-    # Si mandaron nombre
-    if datos.nombre is not None:
-        # Busco si otra receta ya tiene ese nombre
-        existe = db.query(Receta).filter(Receta.nombre.ilike(datos.nombre), Receta.id != receta_id).first()
-        # Si ya existe
-        if existe is not None:
-            # Respondo 400
-            raise HTTPException(status_code=400, detail="Ya existe una receta con ese nombre")
-        # Cambio el nombre
-        receta.nombre = datos.nombre
-    # Si mandaron descripción
-    if datos.descripcion is not None:
-        # Cambio la descripción
-        receta.descripcion = datos.descripcion
-    # Si mandaron precio
-    if datos.precio_venta is not None:
-        # Cambio el precio
-        receta.precio_venta = datos.precio_venta
-    # Si mandaron activo
-    if datos.activo is not None:
-        # Cambio el estado
-        receta.activo = datos.activo
-    # Si mandaron ingredientes
-    if datos.ingredientes is not None:
-        # Reviso los ingredientes nuevos
-        revisar_ingredientes(datos.ingredientes, db)
-        # Borro los ingredientes que tenía antes
-        db.query(RecetaIngrediente).filter(RecetaIngrediente.receta_id == receta_id).delete()
-        # Recorro los ingredientes nuevos
-        for ingrediente in datos.ingredientes:
-            # Creo cada ingrediente
-            nuevo_ingrediente = RecetaIngrediente(
-                receta_id=receta_id,  # Receta
-                material_id=ingrediente.material_id,  # Material
-                cantidad=ingrediente.cantidad,  # Cantidad
-            )
-            # Lo agrego a la sesión
-            db.add(nuevo_ingrediente)
-    # Guardo todos los cambios
-    db.commit()
-    # Vuelvo a leer la receta
-    db.refresh(receta)
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que actualice la receta
+    receta = receta_service.actualizar_receta(bd, receta_id, datos)
     # Devuelvo la receta con su costo
-    return armar_receta(receta, db)
+    return receta
 
 
-# Ruta para eliminar una receta (solo el encargado)
-@router.delete("/{receta_id}")
-def eliminar_receta(receta_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+# Ruta para eliminar una receta
+@enrutador.delete(
+    "/{receta_id}", response_model=mensaje_respuesta,
+    summary="Eliminar una receta",  # Título corto que sale en /docs
+    description="Borra la receta y sus ingredientes. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403, 404, 422),  # Errores que puede responder
+)
+def eliminar_receta(receta_id: int, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede eliminar recetas
-    verificar_rol(usuario_actual, ["encargado"])
-    # Busco la receta
-    receta = db.query(Receta).filter(Receta.id == receta_id).first()
-    # Si no existe
-    if receta is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="La receta no existe")
-    # Primero borro los ingredientes de la receta
-    db.query(RecetaIngrediente).filter(RecetaIngrediente.receta_id == receta_id).delete()
-    # Después borro la receta
-    db.delete(receta)
-    # Guardo los cambios
-    db.commit()
-    # Respondo con un mensaje
-    return {"mensaje": "La receta se eliminó"}
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que elimine la receta
+    respuesta = receta_service.eliminar_receta(bd, receta_id)
+    # Devuelvo el mensaje
+    return respuesta

@@ -40,7 +40,7 @@ INSERT INTO fichas (codigo, programa, jornada, vocero, cantidad_estudiantes) VAL
 
 
 -- USUARIOS (12 usuarios)
-INSERT INTO usuarios (documento, nombre, correo, telefono, password, rol_id, ficha_id, es_beneficiario, activo) VALUES
+INSERT INTO usuarios (documento, nombre, correo, telefono, contrasena, rol_id, ficha_id, es_beneficiario, activo) VALUES
 ('1083000001', 'Marta Lucía Rojas', 'encargado@gastrosena.com', '3104567890', '$2b$10$elAlppC4AFChDTvtS6U7/.3.ZltWaDCNZaaY0kd0nZSpub/uGK/ja', 1, NULL, FALSE, TRUE), -- id 1 encargada
 ('1083000002', 'Carlos Andrés Muñoz', 'instructor@gastrosena.com', '3112223344', '$2b$10$//KFz2sbTRuYKCt.xpb7r.ZY.Wi./fkgR6VQco0Aq6d3SFO1kUNV6', 2, NULL, FALSE, TRUE), -- id 2 instructor con deuda vencida
 ('1083000003', 'Diana Patricia Cerón', 'diana.ceron@gastrosena.com', '3123334455', '$2b$10$//KFz2sbTRuYKCt.xpb7r.ZY.Wi./fkgR6VQco0Aq6d3SFO1kUNV6', 2, NULL, FALSE, TRUE), -- id 3 instructora con deuda
@@ -189,3 +189,24 @@ INSERT INTO sugerencias (usuario_id, asunto, mensaje, estado, respuesta, fecha_r
 (3, 'Cubiertos', 'Faltaron cubiertos desechables el martes.', 'ATENDIDA', 'Se aumentó el pedido de cubiertos.', CURRENT_TIMESTAMP), -- Diana
 (12, 'Muy buena atención', 'Excelente servicio durante la visita al Tecnoparque.', 'ATENDIDA', 'Gracias por visitarnos.', CURRENT_TIMESTAMP), -- Ana
 (4, 'Menú de la semana', 'Publicar el menú de toda la semana el lunes ayudaría a planear.', 'PENDIENTE', NULL, NULL); -- Jorge
+
+
+-- AUDITORÍA DE LOS DATOS DE PRUEBA
+-- Los datos de arriba los registró la encargada (id 1), así que ella queda como quien los creó
+UPDATE fichas SET creado_por = 1;
+-- Usuarios: los creó la encargada (ella misma no tiene quién la creó)
+UPDATE usuarios SET creado_por = 1 WHERE id <> 1;
+-- Menús creados por la encargada
+UPDATE menus SET creado_por = 1;
+-- Cada reserva la creó la persona que reservó
+UPDATE reservas SET creado_por = usuario_id;
+-- Los pagos los registró la encargada
+UPDATE pagos_instructor SET creado_por = 1;
+-- Materiales creados por la encargada
+UPDATE materiales SET creado_por = 1;
+-- Recetas creadas por la encargada
+UPDATE recetas SET creado_por = 1;
+-- Cada sugerencia la creó quien la mandó
+UPDATE sugerencias SET creado_por = usuario_id;
+-- Las sugerencias atendidas las modificó la encargada cuando respondió
+UPDATE sugerencias SET modificado_por = 1, fecha_modificacion = fecha_respuesta WHERE estado = 'ATENDIDA';

@@ -1,318 +1,132 @@
 # Rutas para reservar almuerzos, cancelarlos y marcar los pagos
 
-# date es una fecha y datetime es fecha con hora
-from datetime import date, datetime
+# date es una fecha
+from datetime import date
 # Optional quiere decir que un parámetro puede venir vacío
 from typing import Optional
 
-# APIRouter agrupa las rutas, Depends es para dependencias y HTTPException para los errores
-from fastapi import APIRouter, Depends, HTTPException
+# APIRouter agrupa las rutas y Depends es para dependencias
+from fastapi import APIRouter, Depends
 # Session es el tipo de la sesión de la base de datos
 from sqlalchemy.orm import Session
 
-# Horario en el que se puede reservar
-from app.config import HORA_APERTURA, HORA_CIERRE
 # Función que da la sesión de la base de datos
-from app.database import get_db
-# Modelos que uso
-from app.models import Menu, Reserva, Usuario
+from app.database.conexion import obtener_bd
+# Modelo de usuario
+from app.models.usuario import modelo_usuario
+# Funciones de permisos
+from app.core.permisos import obtener_usuario_actual, verificar_rol
+# Listas de roles que pueden entrar
+from app.core.roles import solo_encargado, comensales
 # Esquemas que uso
-from app.schemas import ReservaCrear, PagoReservaDatos
-# Funciones de seguridad
-from app.seguridad import obtener_usuario_actual, verificar_rol
+from app.schemas.reserva import reserva_crear, pago_reserva_datos
+# Servicio con la lógica de las reservas
+from app.services import reserva_service
 
-# Creo el router, todas las rutas empiezan con /reservas
-router = APIRouter(prefix="/reservas", tags=["Reservas"])
+# Función que documenta en /docs los errores que puede responder cada ruta
+from app.core.errores import respuestas_error
 
-
-# Función que convierte una reserva en un diccionario para responder
-def convertir_reserva(reserva):
-    # Armo el diccionario con los datos de la reserva
-    return {
-        "id": reserva.id,  # Id de la reserva
-        "menu_id": reserva.menu_id,  # Id del menú
-        "fecha_menu": reserva.menu.fecha,  # Fecha del menú
-        "nombre_menu": reserva.menu.nombre,  # Nombre del plato
-        "usuario_id": reserva.usuario_id,  # Id de quien reservó
-        "nombre_usuario": reserva.usuario.nombre,  # Nombre de quien reservó
-        "tipo": reserva.tipo,  # APRENDIZ, BENEFICIARIO, INSTRUCTOR o INVITADO
-        "valor": reserva.valor,  # Lo que tiene que pagar
-        "estado": reserva.estado,  # Estado de la reserva
-        "fecha_creacion": reserva.fecha_creacion,  # Cuándo se hizo
-    }
-
-
-# Función que dice si estamos en el horario para reservar o cancelar
-def esta_en_horario():
-    # Saco la hora de ahora (solo la hora, de 0 a 23)
-    hora_actual = datetime.now().hour
-    # Si está entre la hora de apertura y la de cierre
-    if hora_actual >= HORA_APERTURA and hora_actual < HORA_CIERRE:
-        # Sí está en horario
-        return True
-    # Si no, no está en horario
-    return False
+# Creo el enrutador, todas las rutas empiezan con /reservas
+enrutador = APIRouter(prefix="/reservas", tags=["Reservas"])
 
 
 # Ruta para reservar o comprar un almuerzo (aprendiz, instructor e invitado)
-@router.post("", status_code=201)
-def reservar(datos: ReservaCrear, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.post(
+    "", status_code=201,
+    summary="Reservar o comprar un almuerzo",  # Título corto que sale en /docs
+    description="La API pone el precio según el rol: aprendiz $5.000, beneficiario $0, instructor $5.000 a su cuenta del mes e invitado $8.000. Solo se reserva entre las 7:00 a. m. y las 9:00 p. m., una vez por menú (409), y no se reservan menús agotados, inactivos o de días pasados. **Rol requerido:** aprendiz, instructor o invitado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 409, 422),  # Errores que puede responder
+)
+def reservar(datos: reserva_crear, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo los que comen pueden reservar (el encargado no)
-    verificar_rol(usuario_actual, ["aprendiz", "instructor", "invitado"])
-    # Reviso que esté en el horario
-    if not esta_en_horario():
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="Solo se puede reservar entre las " + str(HORA_APERTURA) + ":00 y las " + str(HORA_CIERRE) + ":00")
-    # Busco el menú
-    menu = db.query(Menu).filter(Menu.id == datos.menu_id).first()
-    # Si no existe
-    if menu is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="El menú no existe")
-    # Si el menú está inactivo
-    if menu.activo == False:
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="El menú no está disponible")
-    # Si el menú es de un día que ya pasó
-    if menu.fecha < date.today():
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="No se puede reservar el menú de un día que ya pasó")
-    # Si ya no quedan almuerzos
-    if menu.cantidad_disponible <= 0:
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="El menú está agotado")
-    # Busco si la persona ya tiene una reserva para este menú
-    reserva_existente = db.query(Reserva).filter(
-        Reserva.menu_id == menu.id,  # De este menú
-        Reserva.usuario_id == usuario_actual.id,  # De esta persona
-        Reserva.estado != "CANCELADA",  # Que no esté cancelada
-    ).first()
-    # Si ya tiene una reserva
-    if reserva_existente is not None:
-        # Respondo 400 porque solo puede tener una
-        raise HTTPException(status_code=400, detail="Ya tiene una reserva para este menú")
-    # Saco el nombre del rol
-    rol = usuario_actual.rol.nombre
-    # Si es aprendiz
-    if rol == "aprendiz":
-        # Si es beneficiario
-        if usuario_actual.es_beneficiario == True:
-            # El tipo es beneficiario
-            tipo = "BENEFICIARIO"
-            # No paga nada
-            valor = 0
-            # Queda pagado de una vez
-            estado = "PAGADO"
-        # Si no es beneficiario
-        else:
-            # El tipo es aprendiz
-            tipo = "APRENDIZ"
-            # Paga el precio de aprendiz
-            valor = menu.precio_aprendiz
-            # Queda reservado hasta que pague
-            estado = "RESERVADO"
-    # Si es instructor
-    elif rol == "instructor":
-        # El tipo es instructor
-        tipo = "INSTRUCTOR"
-        # Paga el precio de aprendiz
-        valor = menu.precio_aprendiz
-        # Queda pendiente porque lo paga en su cuenta del mes
-        estado = "PENDIENTE"
-    # Si es invitado
-    else:
-        # El tipo es invitado
-        tipo = "INVITADO"
-        # Paga el precio de invitado
-        valor = menu.precio_invitado
-        # Queda reservado hasta que pague
-        estado = "RESERVADO"
-    # Le quito un almuerzo a los disponibles
-    menu.cantidad_disponible = menu.cantidad_disponible - 1
-    # Creo la reserva
-    nueva_reserva = Reserva(
-        menu_id=menu.id,  # Menú
-        usuario_id=usuario_actual.id,  # Persona
-        tipo=tipo,  # Tipo
-        valor=valor,  # Valor
-        estado=estado,  # Estado
-    )
-    # La agrego a la sesión
-    db.add(nueva_reserva)
-    # Guardo la reserva y el menú al mismo tiempo
-    db.commit()
-    # Vuelvo a leer la reserva para tener el id
-    db.refresh(nueva_reserva)
+    verificar_rol(usuario_actual, comensales)
+    # Le pido al servicio que haga la reserva
+    reserva = reserva_service.reservar(bd, datos, usuario_actual)
     # Devuelvo la reserva
-    return convertir_reserva(nueva_reserva)
+    return reserva
 
 
 # Ruta para ver mis reservas (aprendiz, instructor e invitado)
-@router.get("/mias")
-def mis_reservas(estado: Optional[str] = None, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.get(
+    "/mias",
+    summary="Ver mis reservas",  # Título corto que sale en /docs
+    description="Lista las reservas de quien inició sesión. **Rol requerido:** aprendiz, instructor o invitado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403),  # Errores que puede responder
+)
+def mis_reservas(estado: Optional[str] = None, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo los que comen tienen reservas
-    verificar_rol(usuario_actual, ["aprendiz", "instructor", "invitado"])
-    # Traigo las reservas de la persona
-    consulta = db.query(Reserva).filter(Reserva.usuario_id == usuario_actual.id)
-    # Si mandaron estado
-    if estado is not None:
-        # Filtro por estado
-        consulta = consulta.filter(Reserva.estado == estado)
-    # Ordeno de la más nueva a la más vieja
-    reservas = consulta.order_by(Reserva.id.desc()).all()
-    # Aquí voy a guardar las reservas convertidas
-    lista = []
-    # Recorro las reservas
-    for reserva in reservas:
-        # Agrego cada reserva convertida
-        lista.append(convertir_reserva(reserva))
+    verificar_rol(usuario_actual, comensales)
+    # Le pido mis reservas al servicio
+    lista = reserva_service.mis_reservas(bd, usuario_actual, estado)
     # Devuelvo la lista
     return lista
 
 
 # Ruta para ver todas las reservas (solo el encargado)
-@router.get("")
+@enrutador.get(
+    "",
+    summary="Ver todas las reservas",  # Título corto que sale en /docs
+    description="Lista las reservas con filtros (fecha, estado y tipo) y paginación. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403, 422),  # Errores que puede responder
+)
 def listar_reservas(
     fecha: Optional[date] = None,  # Fecha del menú
     estado: Optional[str] = None,  # Estado de la reserva
     tipo: Optional[str] = None,  # Tipo de reserva
-    skip: int = 0,  # Cuántos registros me salto
-    limit: int = 100,  # Cuántos registros traigo como máximo
-    db: Session = Depends(get_db),  # Sesión de la base de datos
-    usuario_actual: Usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
+    saltar: int = 0,  # Cuántos registros me salto
+    limite: int = 100,  # Cuántos registros traigo como máximo
+    bd: Session = Depends(obtener_bd),  # Sesión de la base de datos
+    usuario_actual: modelo_usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
 ):
     # Solo el encargado puede ver todas las reservas
-    verificar_rol(usuario_actual, ["encargado"])
-    # Empiezo con todas las reservas
-    consulta = db.query(Reserva)
-    # Si mandaron fecha
-    if fecha is not None:
-        # Busco el menú de esa fecha
-        menu = db.query(Menu).filter(Menu.fecha == fecha).first()
-        # Si no hay menú ese día
-        if menu is None:
-            # No hay reservas
-            return []
-        # Filtro por el menú de ese día
-        consulta = consulta.filter(Reserva.menu_id == menu.id)
-    # Si mandaron estado
-    if estado is not None:
-        # Filtro por estado
-        consulta = consulta.filter(Reserva.estado == estado)
-    # Si mandaron tipo
-    if tipo is not None:
-        # Filtro por tipo
-        consulta = consulta.filter(Reserva.tipo == tipo)
-    # Ordeno de la más nueva a la más vieja y pagino
-    reservas = consulta.order_by(Reserva.id.desc()).offset(skip).limit(limit).all()
-    # Aquí voy a guardar las reservas convertidas
-    lista = []
-    # Recorro las reservas
-    for reserva in reservas:
-        # Agrego cada reserva convertida
-        lista.append(convertir_reserva(reserva))
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido la lista al servicio
+    lista = reserva_service.listar_reservas(bd, fecha, estado, tipo, saltar, limite)
     # Devuelvo la lista
     return lista
 
 
 # Ruta para ver una reserva por su id
-@router.get("/{reserva_id}")
-def ver_reserva(reserva_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
-    # Busco la reserva
-    reserva = db.query(Reserva).filter(Reserva.id == reserva_id).first()
-    # Si no existe
-    if reserva is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="La reserva no existe")
-    # Si no es el encargado solo puede ver sus propias reservas
-    if usuario_actual.rol.nombre != "encargado" and reserva.usuario_id != usuario_actual.id:
-        # Respondo 403
-        raise HTTPException(status_code=403, detail="Solo puede ver sus propias reservas")
+@enrutador.get(
+    "/{reserva_id}",
+    summary="Ver una reserva",  # Título corto que sale en /docs
+    description="Cada persona solo puede ver sus propias reservas; el encargado puede ver todas. **Rol requerido:** cualquiera con sesión iniciada.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403, 404, 422),  # Errores que puede responder
+)
+def ver_reserva(reserva_id: int, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
+    # Le pido la reserva al servicio (revisa que sea mía o que yo sea el encargado)
+    reserva = reserva_service.ver_reserva(bd, reserva_id, usuario_actual)
     # Devuelvo la reserva
-    return convertir_reserva(reserva)
+    return reserva
 
 
 # Ruta para cancelar mi reserva
-@router.patch("/{reserva_id}/cancelar")
-def cancelar_reserva(reserva_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.patch(
+    "/{reserva_id}/cancelar",
+    summary="Cancelar mi reserva",  # Título corto que sale en /docs
+    description="Cancela una reserva propia dentro del horario de reservas. El almuerzo vuelve a quedar disponible. **Rol requerido:** aprendiz, instructor o invitado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores que puede responder
+)
+def cancelar_reserva(reserva_id: int, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo los que comen pueden cancelar
-    verificar_rol(usuario_actual, ["aprendiz", "instructor", "invitado"])
-    # Busco la reserva
-    reserva = db.query(Reserva).filter(Reserva.id == reserva_id).first()
-    # Si no existe
-    if reserva is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="La reserva no existe")
-    # Solo puede cancelar sus propias reservas
-    if reserva.usuario_id != usuario_actual.id:
-        # Respondo 403
-        raise HTTPException(status_code=403, detail="Solo puede cancelar sus propias reservas")
-    # Al principio digo que no se puede cancelar
-    se_puede_cancelar = False
-    # Si está reservada o pendiente sí se puede
-    if reserva.estado == "RESERVADO" or reserva.estado == "PENDIENTE":
-        # Sí se puede
-        se_puede_cancelar = True
-    # Si es de un beneficiario (no pagó nada) también se puede
-    if reserva.tipo == "BENEFICIARIO" and reserva.estado == "PAGADO":
-        # Sí se puede
-        se_puede_cancelar = True
-    # Si no se puede cancelar
-    if se_puede_cancelar == False:
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="No se puede cancelar una reserva en estado " + reserva.estado)
-    # Si el menú es de un día que ya pasó
-    if reserva.menu.fecha < date.today():
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="No se puede cancelar la reserva de un día que ya pasó")
-    # Reviso que esté en el horario
-    if not esta_en_horario():
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="Solo se puede cancelar entre las " + str(HORA_APERTURA) + ":00 y las " + str(HORA_CIERRE) + ":00")
-    # Le devuelvo el almuerzo al menú
-    reserva.menu.cantidad_disponible = reserva.menu.cantidad_disponible + 1
-    # Cambio el estado a cancelada
-    reserva.estado = "CANCELADA"
-    # Guardo los cambios
-    db.commit()
-    # Vuelvo a leer la reserva
-    db.refresh(reserva)
+    verificar_rol(usuario_actual, comensales)
+    # Le pido al servicio que cancele la reserva
+    reserva = reserva_service.cancelar_reserva(bd, reserva_id, usuario_actual)
     # Devuelvo la reserva
-    return convertir_reserva(reserva)
+    return reserva
 
 
 # Ruta para marcar si una reserva se pagó o no (solo el encargado)
-@router.patch("/{reserva_id}/pago")
-def marcar_pago(reserva_id: int, datos: PagoReservaDatos, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.patch(
+    "/{reserva_id}/pago",
+    summary="Marcar el pago de una reserva",  # Título corto que sale en /docs
+    description="Marca una reserva como PAGADO o NO_PAGADO. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores que puede responder
+)
+def marcar_pago(reserva_id: int, datos: pago_reserva_datos, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede marcar pagos
-    verificar_rol(usuario_actual, ["encargado"])
-    # El estado solo puede ser PAGADO o NO_PAGADO
-    if datos.estado != "PAGADO" and datos.estado != "NO_PAGADO":
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="El estado debe ser PAGADO o NO_PAGADO")
-    # Busco la reserva
-    reserva = db.query(Reserva).filter(Reserva.id == reserva_id).first()
-    # Si no existe
-    if reserva is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="La reserva no existe")
-    # Los instructores pagan en la cartera, no aquí
-    if reserva.tipo == "INSTRUCTOR":
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="Los consumos de los instructores se pagan en la cartera")
-    # Los beneficiarios no pagan
-    if reserva.tipo == "BENEFICIARIO":
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="La reserva de un beneficiario no tiene costo")
-    # Si la reserva está cancelada
-    if reserva.estado == "CANCELADA":
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="La reserva está cancelada")
-    # Cambio el estado
-    reserva.estado = datos.estado
-    # Guardo los cambios
-    db.commit()
-    # Vuelvo a leer la reserva
-    db.refresh(reserva)
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que marque el pago
+    reserva = reserva_service.marcar_pago(bd, reserva_id, datos)
     # Devuelvo la reserva
-    return convertir_reserva(reserva)
+    return reserva

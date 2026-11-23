@@ -10,34 +10,34 @@ from datetime import date, timedelta
 from fastapi.testclient import TestClient
 
 # Traigo la aplicación
-from app.main import app
+from app.main import aplicacion
 
 # Creo el cliente para hacer las peticiones
-client = TestClient(app)
+cliente = TestClient(aplicacion)
 # Todas las rutas empiezan con esto
-API = "/api/v1"
+api = "/api/v1"
 
 
 # Función para iniciar sesión y devolver el encabezado con el token
-def iniciar_sesion(correo, password):
-    # Hago el login
-    respuesta = client.post(API + "/auth/login", json={"correo": correo, "password": password})
+def iniciar_sesion(correo, contrasena):
+    # Inicio sesión
+    respuesta = cliente.post(api + "/autenticacion/ingresar", json={"correo": correo, "contrasena": contrasena})
     # Saco el token de la respuesta
-    token = respuesta.json()["access_token"]
+    token = respuesta.json()["token_acceso"]
     # Devuelvo el encabezado listo para usar
     return {"Authorization": "Bearer " + token}
 
 
 # Inicio sesión una sola vez con la encargada
-ENCARGADO = iniciar_sesion("encargado@gastrosena.com", "Encargado123")
+cabecera_encargado = iniciar_sesion("encargado@gastrosena.com", "Encargado123")
 # Inicio sesión con el instructor (Carlos, que tiene deuda vencida)
-INSTRUCTOR = iniciar_sesion("instructor@gastrosena.com", "Instructor123")
+cabecera_instructor = iniciar_sesion("instructor@gastrosena.com", "Instructor123")
 # Inicio sesión con la aprendiz
-APRENDIZ = iniciar_sesion("aprendiz@gastrosena.com", "Aprendiz123")
+cabecera_aprendiz = iniciar_sesion("aprendiz@gastrosena.com", "Aprendiz123")
 # Inicio sesión con el aprendiz beneficiario
-BENEFICIARIO = iniciar_sesion("beneficiario@gastrosena.com", "Aprendiz123")
+cabecera_beneficiario = iniciar_sesion("beneficiario@gastrosena.com", "Aprendiz123")
 # Inicio sesión con el invitado
-INVITADO = iniciar_sesion("invitado@gastrosena.com", "Invitado123")
+cabecera_invitado = iniciar_sesion("invitado@gastrosena.com", "Invitado123")
 
 
 # Función que da un número al azar de 10 cifras (para que los datos no se repitan)
@@ -55,18 +55,18 @@ def crear_usuario_prueba(rol_id, ficha_id=None):
         "documento": numero,  # Documento al azar
         "nombre": "Usuario de prueba",  # Nombre
         "correo": "prueba" + numero + "@gastrosena.com",  # Correo al azar
-        "password": "Prueba12345",  # Contraseña segura
+        "contrasena": "Prueba12345",  # Contraseña segura
         "rol_id": rol_id,  # Rol
         "ficha_id": ficha_id,  # Ficha
     }
     # Creo el usuario con la encargada
-    respuesta = client.post(API + "/usuarios", json=datos, headers=ENCARGADO)
+    respuesta = cliente.post(api + "/usuarios", json=datos, headers=cabecera_encargado)
     # Saco los datos del usuario creado
     usuario = respuesta.json()
     # Le agrego la contraseña para usarla en las pruebas
-    usuario["password"] = datos["password"]
+    usuario["contrasena"] = datos["contrasena"]
     # Le agrego el encabezado con su token
-    usuario["headers"] = iniciar_sesion(datos["correo"], datos["password"])
+    usuario["cabeceras"] = iniciar_sesion(datos["correo"], datos["contrasena"])
     # Devuelvo el usuario
     return usuario
 
@@ -87,10 +87,28 @@ def crear_menu_prueba(cantidad=50):
             "cantidad_total": cantidad,  # Cantidad
         }
         # Creo el menú con la encargada
-        respuesta = client.post(API + "/menus", json=datos, headers=ENCARGADO)
+        respuesta = cliente.post(api + "/menus", json=datos, headers=cabecera_encargado)
         # Si se creó bien
         if respuesta.status_code == 201:
             # Devuelvo el menú
             return respuesta.json()
     # Si nunca se pudo crear hago fallar la prueba
     raise Exception("No se pudo crear el menú de prueba")
+
+
+# Función para crear un material de prueba
+def crear_material_prueba(stock=10):
+    # Armo los datos del material
+    datos = {
+        "codigo_barras": "77" + numero_al_azar(),  # Código de barras al azar de 12 números
+        "nombre": "Material de prueba",  # Nombre
+        "categoria": "GRANO",  # Categoría
+        "unidad_medida": "KG",  # Unidad
+        "costo_unitario": 1000,  # Costo
+        "stock_inicial": stock,  # Stock inicial
+        "stock_minimo": 2,  # Stock mínimo
+    }
+    # Creo el material
+    respuesta = cliente.post(api + "/inventario/materiales", json=datos, headers=cabecera_encargado)
+    # Devuelvo el material
+    return respuesta.json()

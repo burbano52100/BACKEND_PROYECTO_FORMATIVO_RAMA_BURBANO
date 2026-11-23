@@ -5,265 +5,142 @@ from datetime import date
 # Optional quiere decir que un parámetro puede venir vacío
 from typing import Optional
 
-# APIRouter agrupa las rutas, Depends es para dependencias y HTTPException para los errores
-from fastapi import APIRouter, Depends, HTTPException
+# APIRouter agrupa las rutas y Depends es para dependencias
+from fastapi import APIRouter, Depends
 # Session es el tipo de la sesión de la base de datos
 from sqlalchemy.orm import Session
 
 # Función que da la sesión de la base de datos
-from app.database import get_db
-# Modelos que uso
-from app.models import Menu, Reserva, Usuario
+from app.database.conexion import obtener_bd
+# Modelo de usuario
+from app.models.usuario import modelo_usuario
+# Funciones de permisos
+from app.core.permisos import obtener_usuario_actual, verificar_rol
+# Lista de roles que pueden entrar
+from app.core.roles import solo_encargado
 # Esquemas que uso
-from app.schemas import MenuCrear, MenuActualizar, MenuRespuesta
-# Funciones de seguridad
-from app.seguridad import obtener_usuario_actual, verificar_rol
+from app.schemas.menu import menu_crear, menu_actualizar, menu_respuesta
+# Esquema para responder un mensaje
+from app.schemas.comunes import mensaje_respuesta
+# Servicio con la lógica de los menús
+from app.services import menu_service
 
-# Creo el router, todas las rutas empiezan con /menus
-router = APIRouter(prefix="/menus", tags=["Menús"])
+# Función que documenta en /docs los errores que puede responder cada ruta
+from app.core.errores import respuestas_error
 
-
-# Función que dice cuánto le toca pagar a un usuario según su rol
-def calcular_precio(usuario, menu):
-    # Si es aprendiz
-    if usuario.rol.nombre == "aprendiz":
-        # Si es beneficiario no paga nada
-        if usuario.es_beneficiario == True:
-            # Precio 0
-            return 0
-        # Si no es beneficiario paga el precio de aprendiz
-        return menu.precio_aprendiz
-    # El instructor paga lo mismo que el aprendiz (se le carga a su cuenta del mes)
-    if usuario.rol.nombre == "instructor":
-        # Precio de aprendiz
-        return menu.precio_aprendiz
-    # El invitado paga el precio de invitado
-    if usuario.rol.nombre == "invitado":
-        # Precio de invitado
-        return menu.precio_invitado
-    # El encargado no compra almuerzo
-    return None
-
-
-# Función que arma el menú con el precio que le toca a la persona que consulta
-def menu_con_mi_precio(menu, usuario, db):
-    # Busco si la persona ya tiene una reserva para ese menú
-    mi_reserva = db.query(Reserva).filter(
-        Reserva.menu_id == menu.id,  # De este menú
-        Reserva.usuario_id == usuario.id,  # De esta persona
-        Reserva.estado != "CANCELADA",  # Que no esté cancelada
-    ).first()
-    # Al principio digo que no tiene reserva
-    mi_reserva_id = None
-    # Si sí tiene reserva
-    if mi_reserva is not None:
-        # Guardo el id de la reserva
-        mi_reserva_id = mi_reserva.id
-    # Devuelvo el menú con los datos extra
-    return {
-        "id": menu.id,  # Id del menú
-        "fecha": menu.fecha,  # Fecha
-        "nombre": menu.nombre,  # Nombre del plato
-        "descripcion": menu.descripcion,  # Lo que trae
-        "precio_aprendiz": menu.precio_aprendiz,  # Precio de aprendiz
-        "precio_invitado": menu.precio_invitado,  # Precio de invitado
-        "cantidad_total": menu.cantidad_total,  # Cuántos hay en total
-        "cantidad_disponible": menu.cantidad_disponible,  # Cuántos quedan
-        "vendidos": menu.cantidad_total - menu.cantidad_disponible,  # Cuántos se vendieron
-        "agotado": menu.cantidad_disponible == 0,  # True si ya no quedan
-        "precio_para_mi": calcular_precio(usuario, menu),  # Lo que me toca pagar a mí
-        "mi_reserva_id": mi_reserva_id,  # Id de mi reserva (None si no he reservado)
-    }
+# Creo el enrutador, todas las rutas empiezan con /menus
+enrutador = APIRouter(prefix="/menus", tags=["Menús"])
 
 
 # Ruta para ver el menú de hoy (todos los roles)
-@router.get("/hoy")
-def menu_de_hoy(db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
-    # Busco el menú activo de hoy
-    menu = db.query(Menu).filter(Menu.fecha == date.today(), Menu.activo == True).first()
-    # Si no hay menú hoy
-    if menu is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="Todavía no hay menú para hoy")
-    # Devuelvo el menú con mi precio
-    return menu_con_mi_precio(menu, usuario_actual, db)
+@enrutador.get(
+    "/hoy",
+    summary="Menú de hoy",  # Título corto que sale en /docs
+    description="Devuelve el menú de hoy con el precio que le toca a quien consulta y si ya tiene reserva. Responde 404 si todavía no hay menú para hoy. **Rol requerido:** cualquiera con sesión iniciada.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 404),  # Errores que puede responder
+)
+def menu_de_hoy(bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
+    # Le pido al servicio el menú de hoy con mi precio
+    menu = menu_service.menu_de_hoy(bd, usuario_actual)
+    # Devuelvo el menú
+    return menu
 
 
 # Ruta para ver los menús de hoy en adelante (todos los roles)
-@router.get("/proximos")
-def proximos_menus(db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
-    # Traigo los menús activos desde hoy ordenados por fecha
-    menus = db.query(Menu).filter(Menu.fecha >= date.today(), Menu.activo == True).order_by(Menu.fecha).all()
-    # Aquí voy a guardar los menús con mi precio
-    lista = []
-    # Recorro los menús
-    for menu in menus:
-        # Agrego cada menú con mi precio
-        lista.append(menu_con_mi_precio(menu, usuario_actual, db))
+@enrutador.get(
+    "/proximos",
+    summary="Menús de hoy en adelante",  # Título corto que sale en /docs
+    description="Lista los menús activos desde hoy con el precio de quien consulta. **Rol requerido:** cualquiera con sesión iniciada.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401),  # Errores que puede responder
+)
+def proximos_menus(bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
+    # Le pido al servicio los próximos menús con mi precio
+    lista = menu_service.proximos_menus(bd, usuario_actual)
     # Devuelvo la lista
     return lista
 
 
 # Ruta para ver todos los menús (historial, solo el encargado)
-@router.get("", response_model=list[MenuRespuesta])
+@enrutador.get(
+    "", response_model=list[menu_respuesta],
+    summary="Ver todos los menús",  # Título corto que sale en /docs
+    description="Historial de menús con filtros por fecha (desde, hasta) y activo, y paginación. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 403, 422),  # Errores que puede responder
+)
 def listar_menus(
     desde: Optional[date] = None,  # Fecha inicial
     hasta: Optional[date] = None,  # Fecha final
     activo: Optional[bool] = None,  # Filtrar activos o inactivos
-    skip: int = 0,  # Cuántos registros me salto
-    limit: int = 100,  # Cuántos registros traigo como máximo
-    db: Session = Depends(get_db),  # Sesión de la base de datos
-    usuario_actual: Usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
+    saltar: int = 0,  # Cuántos registros me salto
+    limite: int = 100,  # Cuántos registros traigo como máximo
+    bd: Session = Depends(obtener_bd),  # Sesión de la base de datos
+    usuario_actual: modelo_usuario = Depends(obtener_usuario_actual),  # Usuario que hace la petición
 ):
     # Solo el encargado puede entrar
-    verificar_rol(usuario_actual, ["encargado"])
-    # Empiezo con todos los menús
-    consulta = db.query(Menu)
-    # Si mandaron fecha inicial
-    if desde is not None:
-        # Solo los menús desde esa fecha
-        consulta = consulta.filter(Menu.fecha >= desde)
-    # Si mandaron fecha final
-    if hasta is not None:
-        # Solo los menús hasta esa fecha
-        consulta = consulta.filter(Menu.fecha <= hasta)
-    # Si mandaron activo
-    if activo is not None:
-        # Filtro por activo
-        consulta = consulta.filter(Menu.activo == activo)
-    # Ordeno del más nuevo al más viejo y pagino
-    menus = consulta.order_by(Menu.fecha.desc()).offset(skip).limit(limit).all()
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido la lista al servicio
+    menus = menu_service.listar_menus(bd, desde, hasta, activo, saltar, limite)
     # Devuelvo la lista
     return menus
 
 
 # Ruta para ver un menú por su id (todos los roles)
-@router.get("/{menu_id}", response_model=MenuRespuesta)
-def ver_menu(menu_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
-    # Busco el menú
-    menu = db.query(Menu).filter(Menu.id == menu_id).first()
-    # Si no existe
-    if menu is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="El menú no existe")
+@enrutador.get(
+    "/{menu_id}", response_model=menu_respuesta,
+    summary="Ver un menú",  # Título corto que sale en /docs
+    description="Busca un menú por su id. **Rol requerido:** cualquiera con sesión iniciada.",  # Explicación y rol que se necesita
+    responses=respuestas_error(401, 404, 422),  # Errores que puede responder
+)
+def ver_menu(menu_id: int, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
+    # Le pido el menú al servicio (si no existe responde 404)
+    menu = menu_service.buscar_menu_existente(bd, menu_id)
     # Devuelvo el menú
     return menu
 
 
 # Ruta para crear un menú
-@router.post("", response_model=MenuRespuesta, status_code=201)
-def crear_menu(datos: MenuCrear, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.post(
+    "", response_model=menu_respuesta, status_code=201,
+    summary="Crear un menú",  # Título corto que sale en /docs
+    description="Crea el menú de un día. Solo puede haber un menú por día (409) y no se crean menús de días que ya pasaron. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 409, 422),  # Errores que puede responder
+)
+def crear_menu(datos: menu_crear, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede crear menús
-    verificar_rol(usuario_actual, ["encargado"])
-    # La fecha no puede ser de un día que ya pasó
-    if datos.fecha < date.today():
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="No se puede crear un menú para un día que ya pasó")
-    # Busco si ya hay un menú en esa fecha
-    existe = db.query(Menu).filter(Menu.fecha == datos.fecha).first()
-    # Si ya hay uno
-    if existe is not None:
-        # Respondo 400 porque solo puede haber un menú por día
-        raise HTTPException(status_code=400, detail="Ya existe un menú para esa fecha")
-    # Creo el menú
-    nuevo_menu = Menu(
-        fecha=datos.fecha,  # Fecha
-        nombre=datos.nombre,  # Nombre
-        descripcion=datos.descripcion,  # Descripción
-        precio_aprendiz=datos.precio_aprendiz,  # Precio de aprendiz
-        precio_invitado=datos.precio_invitado,  # Precio de invitado
-        cantidad_total=datos.cantidad_total,  # Cantidad total
-        cantidad_disponible=datos.cantidad_total,  # Al principio están todos disponibles
-    )
-    # Lo agrego a la sesión
-    db.add(nuevo_menu)
-    # Lo guardo en la base de datos
-    db.commit()
-    # Lo vuelvo a leer para tener el id
-    db.refresh(nuevo_menu)
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que cree el menú
+    nuevo_menu = menu_service.crear_menu(bd, datos)
     # Devuelvo el menú creado
     return nuevo_menu
 
 
 # Ruta para actualizar un menú
-@router.put("/{menu_id}", response_model=MenuRespuesta)
-def actualizar_menu(menu_id: int, datos: MenuActualizar, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.put(
+    "/{menu_id}", response_model=menu_respuesta,
+    summary="Actualizar un menú",  # Título corto que sale en /docs
+    description="Cambia el nombre, la descripción, los precios o la cantidad. La cantidad no puede quedar menor que los almuerzos ya vendidos. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores que puede responder
+)
+def actualizar_menu(menu_id: int, datos: menu_actualizar, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede actualizar menús
-    verificar_rol(usuario_actual, ["encargado"])
-    # Busco el menú
-    menu = db.query(Menu).filter(Menu.id == menu_id).first()
-    # Si no existe
-    if menu is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="El menú no existe")
-    # No se puede cambiar un menú de un día que ya pasó
-    if menu.fecha < date.today():
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="No se puede cambiar el menú de un día que ya pasó")
-    # Si mandaron nombre
-    if datos.nombre is not None:
-        # Cambio el nombre
-        menu.nombre = datos.nombre
-    # Si mandaron descripción
-    if datos.descripcion is not None:
-        # Cambio la descripción
-        menu.descripcion = datos.descripcion
-    # Si mandaron precio de aprendiz
-    if datos.precio_aprendiz is not None:
-        # Cambio el precio
-        menu.precio_aprendiz = datos.precio_aprendiz
-    # Si mandaron precio de invitado
-    if datos.precio_invitado is not None:
-        # Cambio el precio
-        menu.precio_invitado = datos.precio_invitado
-    # Si mandaron cantidad total
-    if datos.cantidad_total is not None:
-        # Calculo cuántos almuerzos ya se vendieron
-        vendidos = menu.cantidad_total - menu.cantidad_disponible
-        # La cantidad nueva no puede ser menor que lo vendido
-        if datos.cantidad_total < vendidos:
-            # Respondo 400
-            raise HTTPException(status_code=400, detail="La cantidad no puede ser menor que los " + str(vendidos) + " almuerzos ya vendidos")
-        # Cambio la cantidad total
-        menu.cantidad_total = datos.cantidad_total
-        # Lo disponible es lo nuevo menos lo vendido
-        menu.cantidad_disponible = datos.cantidad_total - vendidos
-    # Guardo los cambios
-    db.commit()
-    # Vuelvo a leer el menú
-    db.refresh(menu)
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que actualice el menú
+    menu = menu_service.actualizar_menu(bd, menu_id, datos)
     # Devuelvo el menú actualizado
     return menu
 
 
 # Ruta para eliminar un menú
-@router.delete("/{menu_id}")
-def eliminar_menu(menu_id: int, db: Session = Depends(get_db), usuario_actual: Usuario = Depends(obtener_usuario_actual)):
+@enrutador.delete(
+    "/{menu_id}", response_model=mensaje_respuesta,
+    summary="Eliminar un menú",  # Título corto que sale en /docs
+    description="Si el menú ya tiene reservas solo se desactiva (borrado lógico); si no tiene, se borra. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    responses=respuestas_error(400, 401, 403, 404, 422),  # Errores que puede responder
+)
+def eliminar_menu(menu_id: int, bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):
     # Solo el encargado puede eliminar menús
-    verificar_rol(usuario_actual, ["encargado"])
-    # Busco el menú
-    menu = db.query(Menu).filter(Menu.id == menu_id).first()
-    # Si no existe
-    if menu is None:
-        # Respondo 404
-        raise HTTPException(status_code=404, detail="El menú no existe")
-    # Si ya está inactivo
-    if menu.activo == False:
-        # Respondo 400
-        raise HTTPException(status_code=400, detail="El menú ya está inactivo")
-    # Cuento las reservas que tiene el menú
-    cantidad_reservas = db.query(Reserva).filter(Reserva.menu_id == menu_id).count()
-    # Si tiene reservas no lo puedo borrar
-    if cantidad_reservas > 0:
-        # Solo lo desactivo (borrado lógico)
-        menu.activo = False
-        # Guardo los cambios
-        db.commit()
-        # Respondo con un mensaje
-        return {"mensaje": "El menú tiene reservas, por eso solo se desactivó"}
-    # Si no tiene reservas lo borro de verdad
-    db.delete(menu)
-    # Guardo los cambios
-    db.commit()
-    # Respondo con un mensaje
-    return {"mensaje": "El menú se eliminó"}
+    verificar_rol(usuario_actual, solo_encargado)
+    # Le pido al servicio que elimine el menú
+    respuesta = menu_service.eliminar_menu(bd, menu_id)
+    # Devuelvo el mensaje
+    return respuesta
