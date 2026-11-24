@@ -84,14 +84,15 @@ def reporte_ventas(bd, periodo, fecha):
         reservas = reserva_repository.listar_activas_por_menu(bd, menu.id)
         # Almuerzos de ese día
         almuerzos_dia = len(reservas)
-        # Plata de ese día
-        ingresos_dia = sumar_valores(reservas)
+        # Plata de ese día: solo cuenta lo que ya está pagado, no lo que quedó reservado o pendiente
+        ingresos_dia = sumar_valores([reserva for reserva in reservas if reserva.estado == "PAGADO"])
         # Recorro las reservas para separarlas por tipo
         for reserva in reservas:
             # Cuento el almuerzo en su tipo
             por_tipo[reserva.tipo]["almuerzos"] = por_tipo[reserva.tipo]["almuerzos"] + 1
-            # Sumo la plata en su tipo
-            por_tipo[reserva.tipo]["ingresos"] = por_tipo[reserva.tipo]["ingresos"] + reserva.valor
+            # Sumo la plata en su tipo solo si ya se cobró
+            if reserva.estado == "PAGADO":
+                por_tipo[reserva.tipo]["ingresos"] = por_tipo[reserva.tipo]["ingresos"] + reserva.valor
         # Si ese día se vendió algo
         if almuerzos_dia > 0:
             # Lo agrego a la lista de días
@@ -128,8 +129,8 @@ def indicadores(bd):
         reservas = reserva_repository.listar_activas_por_menu(bd, menu.id)
         # Cuento los almuerzos
         ventas_hoy = len(reservas)
-        # Sumo la plata
-        ingresos_hoy = sumar_valores(reservas)
+        # Sumo la plata ya cobrada (las reservas sin pagar no son ingreso todavía)
+        ingresos_hoy = sumar_valores([reserva for reserva in reservas if reserva.estado == "PAGADO"])
     # Traigo las deudas de los instructores que deben algo
     deudas = cartera_service.deudas_de_instructores(bd)
     # Toda la plata que deben

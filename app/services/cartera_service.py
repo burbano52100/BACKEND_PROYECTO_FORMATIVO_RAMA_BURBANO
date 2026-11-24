@@ -6,7 +6,7 @@ from datetime import date
 # Modelo de pago para crear pagos nuevos
 from app.models.reserva import modelo_pago_instructor
 # Funciones para responder los errores
-from app.core.excepciones import error_regla
+from app.core.excepciones import error_regla, error_no_encontrado
 # Funciones para guardar en la base de datos
 from app.database.conexion import guardar
 # Repositorios que uso
@@ -47,9 +47,14 @@ def lista_de_pagos(bd, instructor_id):
 
 
 # Función que busca un usuario y revisa que sea instructor
-def buscar_instructor(bd, instructor_id):
+def buscar_instructor(bd, instructor_id, bloquear=False):
     # Busco el usuario (si no existe responde 404)
-    instructor = usuario_service.buscar_usuario_existente(bd, instructor_id)
+    if bloquear:
+        instructor = cartera_repository.buscar_instructor_para_pago(bd, instructor_id)
+        if instructor is None:
+            error_no_encontrado("El instructor no existe")
+    else:
+        instructor = usuario_service.buscar_usuario_existente(bd, instructor_id)
     # Si no es instructor
     if instructor.rol.nombre != "instructor":
         # Respondo 400
@@ -240,8 +245,8 @@ def registrar_pago(bd, instructor_id, datos):
     if datos.metodo not in metodos_pago:
         # Respondo 400
         error_regla("El método debe ser EFECTIVO, TRANSFERENCIA o NOMINA")
-    # Busco el instructor
-    instructor = buscar_instructor(bd, instructor_id)
+    # Busco el instructor y lo bloqueo para que otro pago no calcule la misma deuda
+    instructor = buscar_instructor(bd, instructor_id, bloquear=True)
     # Calculo lo que debe
     deuda = calcular_deuda(bd, instructor)
     # Guardo el saldo antes del pago

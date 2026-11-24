@@ -13,6 +13,10 @@ def buscar_material_por_codigo(bd, codigo_barras):
     return bd.query(modelo_material).filter(modelo_material.codigo_barras == codigo_barras).first()
 
 
+def buscar_material_para_movimiento(bd, material_id):
+    return bd.query(modelo_material).filter(modelo_material.id == material_id).with_for_update().first()
+
+
 # Trae los materiales con los filtros ordenados por nombre (sin paginar)
 def listar_materiales(bd, buscar, categoria, activo):
     # Traigo los materiales activos o inactivos según el filtro

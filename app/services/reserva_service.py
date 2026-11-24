@@ -66,8 +66,12 @@ def reservar(bd, datos, usuario):
     if not esta_en_horario():
         # Respondo 400
         error_regla("Solo se puede reservar entre las " + str(hora_apertura) + ":00 y las " + str(hora_cierre) + ":00")
-    # Busco el menú (si no existe responde 404)
-    menu = menu_service.buscar_menu_existente(bd, datos.menu_id)
+    # Busco el menú y lo bloqueo para que otra petición no tome el mismo cupo (si no existe responde 404)
+    menu = menu_repository.buscar_para_reserva(bd, datos.menu_id)
+    # Si no existe el menú
+    if menu is None:
+        # Respondo 404
+        error_no_encontrado("El menú no existe")
     # Si el menú está inactivo
     if menu.activo == False:
         # Respondo 400
@@ -198,8 +202,20 @@ def cancelar_reserva(bd, reserva_id, usuario):
     if not esta_en_horario():
         # Respondo 400
         error_regla("Solo se puede cancelar entre las " + str(hora_apertura) + ":00 y las " + str(hora_cierre) + ":00")
+    # Bloqueo el menú para que otra cancelación no devuelva dos veces el mismo cupo
+    menu = menu_repository.buscar_para_reserva(bd, reserva.menu_id)
+    # Si no existe el menú de la reserva
+    if menu is None:
+        # Respondo 404
+        error_no_encontrado("El menú de la reserva no existe")
+    # Vuelvo a leer la reserva por si otra petición la canceló mientras esperaba el bloqueo
+    bd.refresh(reserva)
+    # Si ya está cancelada no devuelvo el cupo otra vez
+    if reserva.estado == "CANCELADA":
+        # Respondo 400
+        error_regla("La reserva ya está cancelada")
     # Le devuelvo el almuerzo al menú
-    reserva.menu.cantidad_disponible = reserva.menu.cantidad_disponible + 1
+    menu.cantidad_disponible = menu.cantidad_disponible + 1
     # Cambio el estado a cancelada
     reserva.estado = "CANCELADA"
     # Guardo los cambios de la reserva y del menú

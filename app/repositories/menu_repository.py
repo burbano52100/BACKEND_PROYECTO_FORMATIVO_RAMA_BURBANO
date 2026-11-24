@@ -7,6 +7,11 @@ from app.repositories.paginacion import paginar
 
 
 
+# Busca un menú y lo bloquea para que dos reservas no usen el mismo cupo al mismo tiempo
+def buscar_para_reserva(bd, menu_id):
+    return bd.query(modelo_menu).filter(modelo_menu.id == menu_id).with_for_update().first()
+
+
 # Busca el menú de una fecha (activo o no)
 def buscar_por_fecha(bd, fecha):
     # Hago la consulta y traigo el primero (o None si no existe)

@@ -9,11 +9,14 @@ from sqlalchemy import create_engine, inspect
 # sessionmaker crea las sesiones
 from sqlalchemy.orm import sessionmaker
 
+# quote_plus escapa caracteres especiales en la contraseña de la base de datos
+from urllib.parse import quote_plus
+
 # Traigo los datos de conexión que están en config.py
 from app.core.config import bd_servidor, bd_puerto, bd_nombre, bd_usuario, bd_contrasena
 
 # Armo la dirección de la base de datos así: postgresql+psycopg://usuario:clave@servidor:puerto/nombre
-url_base_datos = f"postgresql+psycopg://{bd_usuario}:{bd_contrasena}@{bd_servidor}:{bd_puerto}/{bd_nombre}"
+url_base_datos = f"postgresql+psycopg://{bd_usuario}:{quote_plus(bd_contrasena)}@{bd_servidor}:{bd_puerto}/{bd_nombre}"
 
 # Creo el motor que se conecta a PostgreSQL
 # Con options=-csearch_path=gastrosena le digo que busque las tablas en el esquema gastrosena
@@ -74,8 +77,12 @@ def guardar(bd, registro):
     bd.add(registro)
     # Lleno la auditoría (quién lo creó)
     poner_auditoria(bd)
-    # Lo guardo en la base de datos
-    bd.commit()
+    # Guardo y, si falla, dejo la sesión limpia para no guardar a medias
+    try:
+        bd.commit()
+    except Exception:
+        bd.rollback()
+        raise
     # Lo vuelvo a leer para tener el id y los datos que pone PostgreSQL
     bd.refresh(registro)
     # Devuelvo el registro
@@ -92,8 +99,12 @@ def agregar(bd, registro):
 def guardar_cambios(bd, registro):
     # Lleno la auditoría (quién lo modificó y cuándo)
     poner_auditoria(bd)
-    # Guardo los cambios
-    bd.commit()
+    # Guardo y, si falla, dejo la sesión limpia para no guardar a medias
+    try:
+        bd.commit()
+    except Exception:
+        bd.rollback()
+        raise
     # Vuelvo a leer el registro
     bd.refresh(registro)
     # Devuelvo el registro
@@ -104,14 +115,42 @@ def guardar_cambios(bd, registro):
 def eliminar(bd, registro):
     # Lo borro
     bd.delete(registro)
-    # Guardo los cambios
-    bd.commit()
+    # Guardo y, si falla, dejo la sesión limpia
+    try:
+        bd.commit()
+    except Exception:
+        bd.rollback()
+        raise
 
 
-# Revisa que la base de datos tenga las columnas de auditoría (creado_por, modificado_por...)
+# Revisa que la base de datos tenga las columnas que usan los modelos actuales
 # Si la base se creó antes de la auditoría hay que ejecutar database/04_auditoria.sql
+# y database/05_compatibilidad.sql
+def columnas_faltantes():
+    inspector = inspect(motor)
+    requeridas = {
+        "usuarios": {"contrasena", "creado_por", "fecha_creacion", "modificado_por", "fecha_modificacion"},
+        "fichas": {"creado_por", "fecha_creacion", "modificado_por", "fecha_modificacion"},
+        "menus": {"creado_por", "fecha_creacion", "modificado_por", "fecha_modificacion"},
+        "reservas": {"creado_por", "fecha_creacion", "modificado_por", "fecha_modificacion"},
+        "pagos_instructor": {"creado_por", "fecha_pago", "modificado_por", "fecha_modificacion"},
+        "materiales": {"creado_por", "fecha_creacion", "modificado_por", "fecha_modificacion"},
+        "recetas": {"creado_por", "fecha_creacion", "modificado_por", "fecha_modificacion"},
+        "sugerencias": {"creado_por", "fecha_creacion", "modificado_por", "fecha_respuesta", "fecha_modificacion"},
+        "movimientos_inventario": {"material_id", "usuario_id", "fecha"},
+    }
+    faltantes = []
+    for tabla, columnas in requeridas.items():
+        try:
+            actuales = {columna["name"] for columna in inspector.get_columns(tabla, schema="gastrosena")}
+        except Exception:
+            faltantes.append(tabla + " (tabla inexistente)")
+            continue
+        for columna in sorted(columnas - actuales):
+            faltantes.append(tabla + "." + columna)
+    return faltantes
+
+
+# Compatibilidad con el nombre que usaba main.py
 def falta_auditoria():
-    # Miro las columnas de la tabla menus del esquema gastrosena
-    columnas = [columna["name"] for columna in inspect(motor).get_columns("menus", schema="gastrosena")]
-    # Si no está la columna creado_por, falta la auditoría
-    return "creado_por" not in columnas
+    return bool(columnas_faltantes())

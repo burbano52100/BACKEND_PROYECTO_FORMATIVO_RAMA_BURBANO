@@ -2,15 +2,21 @@
 
 # Modelos de reservas y pagos
 from app.models.reserva import modelo_reserva, modelo_pago_instructor
+# Modelo de usuarios para bloquear al instructor mientras se registra un pago
+from app.models.usuario import modelo_usuario
 
 
-# Trae los consumos de un instructor que no están cancelados
+def buscar_instructor_para_pago(bd, instructor_id):
+    return bd.query(modelo_usuario).filter(modelo_usuario.id == instructor_id).with_for_update().first()
+
+
+# Trae los consumos de un instructor que todavía están pendientes de pago
 def listar_consumos(bd, instructor_id):
     # Hago la consulta
     return bd.query(modelo_reserva).filter(
         modelo_reserva.usuario_id == instructor_id,  # Del instructor
         modelo_reserva.tipo == "INSTRUCTOR",  # Que sean consumos de instructor
-        modelo_reserva.estado != "CANCELADA",  # Que no estén cancelados
+        modelo_reserva.estado.in_(["PENDIENTE", "NO_PAGADO"]),  # Que no estén pagados ni cancelados
     ).all()
 
 

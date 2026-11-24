@@ -21,11 +21,11 @@ bd_usuario = os.getenv("bd_usuario", "api_gastrosena")
 bd_contrasena = os.getenv("bd_contrasena", "")
 
 # Clave secreta con la que se firman los tokens
-clave_secreta = os.getenv("clave_secreta_jwt")
+clave_secreta = (os.getenv("clave_secreta_jwt") or "").strip()
 # Si no pusieron la clave en el .env no dejo que arranque la API
-if clave_secreta is None:
+if len(clave_secreta) < 32 or any(texto in clave_secreta.lower() for texto in ("pon_aqui", "cambiar_esta", "example")):
     # Muestro un error para que se den cuenta de lo que falta
-    raise Exception("Falta poner clave_secreta_jwt en el archivo .env")
+    raise Exception("clave_secreta_jwt debe tener al menos 32 caracteres y no ser un ejemplo")
 
 # Algoritmo con el que se firman los tokens
 algoritmo = "HS256"
@@ -35,7 +35,7 @@ minutos_token_acceso = int(os.getenv("minutos_token_acceso", "30"))
 dias_token_renovar = int(os.getenv("dias_token_renovar", "7"))
 
 # Páginas web que pueden llamar a la API (split las separa por las comas y queda una lista)
-origenes_cors = os.getenv("origenes_cors", "http://localhost:5173").split(",")
+origenes_cors = [origen.strip() for origen in os.getenv("origenes_cors", "http://localhost:5173").split(",") if origen.strip()]
 
 # Hora desde la que se puede reservar (7 de la mañana)
 hora_apertura = int(os.getenv("hora_apertura", "7"))

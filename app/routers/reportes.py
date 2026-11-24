@@ -50,7 +50,7 @@ def reporte_ventas(periodo: str = "dia", fecha: Optional[date] = None, bd: Sessi
 @enrutador.get(
     "/indicadores", response_model=indicadores_respuesta,
     summary="Indicadores de hoy",  # Título corto que sale en /docs
-    description="Reservas, ventas, deudas y alertas de inventario del día. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
+    description="Reservas, ventas, deudas y sugerencias pendientes del día. **Rol requerido:** encargado.",  # Explicación y rol que se necesita
     responses=respuestas_error(401, 403),  # Errores que puede responder
 )
 def indicadores(bd: Session = Depends(obtener_bd), usuario_actual: modelo_usuario = Depends(obtener_usuario_actual)):

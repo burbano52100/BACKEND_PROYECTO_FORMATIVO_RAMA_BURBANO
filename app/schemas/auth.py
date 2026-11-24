@@ -28,7 +28,7 @@ class token_respuesta(BaseModel):
 # Datos para pedir un token nuevo
 class renovar_datos(BaseModel):
     # El token para renovar que dio el inicio de sesión
-    token_renovar: str
+    token_renovar: str = Field(min_length=20)
 
 
 # Datos para cambiar la contraseña

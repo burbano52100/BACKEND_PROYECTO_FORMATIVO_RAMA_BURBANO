@@ -3,8 +3,16 @@
 -- Se ejecuta con el usuario postgres después de 01_ddl.sql y 02_dml.sql
 -- OJO: la contraseña tiene que ser la misma que está en bd_contrasena del archivo .env
 
--- Creo el usuario de la API (si ya existe sale un error en esta línea, pero no pasa nada)
-CREATE USER api_gastrosena WITH PASSWORD 'CambieEstaClave2026';
+-- Creo el usuario de la API; si ya existe, le actualizo la contraseña
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'api_gastrosena') THEN
+        CREATE USER api_gastrosena WITH PASSWORD '1234';
+    ELSE
+        ALTER USER api_gastrosena WITH PASSWORD '1234';
+    END IF;
+END;
+$$;
 
 -- Le doy permiso para conectarse a la base de datos
 GRANT CONNECT ON DATABASE gastrosena_db TO api_gastrosena;

@@ -5,6 +5,12 @@
 from fastapi import HTTPException
 
 
+# Error 422: un parámetro de la petición tiene un formato o rango inválido
+def error_parametros(mensaje):
+    # Lanzo el error con el código 422
+    raise HTTPException(status_code=422, detail=mensaje)
+
+
 # Error 400: no se cumple una regla del negocio o los datos están malos
 def error_regla(mensaje):
     # Lanzo el error con el código 400

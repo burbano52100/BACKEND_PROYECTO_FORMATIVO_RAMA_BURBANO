@@ -1,14 +1,14 @@
 # Esquemas de las reservas
 # Sirven para revisar los datos que llegan a la API y para decir qué datos se responden
 
-# BaseModel es la clase base
-from pydantic import BaseModel
+# BaseModel es la clase base y Field sirve para poner reglas
+from pydantic import BaseModel, Field
 
 
 # Datos para reservar (el precio lo calcula la API, no se manda)
 class reserva_crear(BaseModel):
     # Id del menú que se quiere reservar
-    menu_id: int
+    menu_id: int = Field(gt=0)
 
 
 # Datos para marcar el pago de una reserva

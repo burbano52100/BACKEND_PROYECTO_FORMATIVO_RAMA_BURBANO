@@ -2,17 +2,19 @@
 
 API REST de reservas de almuerzos del SENA Tecnoparque Yamboró. Python + FastAPI + PostgreSQL (esquema `gastrosena`). Todos los endpoints de módulos empiezan con `/api/v1`.
 
+Estado verificado el 24/11/2026: base `gastrosena_db` creada con 11 tablas, 4 bases en el servidor (`gastrosena_db` y las del sistema), y 59/59 pruebas en verde.
+
 ## Carpetas clave del código (subrayadas)
 
 Estas son las carpetas que hacen funcionar la API; si falta alguna, no arranca o no responde.
 
 - **<u>app/</u>** — código fuente principal.
-  - **<u>app/main.py</u>** (archivo) — crea la aplicación, engancha los 10 routers bajo `/api/v1` y revisa la auditoría al arrancar.
-  - **<u>app/routers/</u>** — los 53 endpoints; reciben la petición y revisan el rol.
+  - **<u>app/main.py</u>** (archivo) — crea la aplicación, engancha los 10 routers bajo `/api/v1` y revisa que la BD tenga las columnas actuales al arrancar.
+  - **<u>app/routers/</u>** — 53 operaciones en 36 rutas bajo `/api/v1` más `GET /` de salud; reciben la petición y revisan el rol.
   - **<u>app/services/</u>** — las reglas del negocio: precios, cupos, stock, deudas y horarios.
   - **<u>app/repositories/</u>** — las consultas reales a PostgreSQL.
   - **<u>app/models/</u>** — las tablas de SQLAlchemy.
-  - **<u>app/schemas/</u>** — validación del JSON que entra y sale.
+  - **<u>app/schemas/</u>** — validación del JSON que entra y de las respuestas donde se declaró `response_model`.
   - **<u>app/core/</u>** — configuración, JWT, contraseñas, permisos, errores y horario de reservas.
   - **<u>app/database/</u>** — conexión, sesiones y auditoría; `obtener_bd()` se usa en cada petición.
 - **<u>database/</u>** — scripts SQL (tablas, datos de prueba, usuario y auditoría); sin ellos no hay base de datos.
@@ -22,7 +24,7 @@ Estas son las carpetas que hacen funcionar la API; si falta alguna, no arranca o
 Todo lo de abajo se ejecuta en **PowerShell**, desde la raíz del proyecto:
 
 ```powershell
-cd "C:\Users\BURBANO\Desktop\TRABAJOS\PORTAFOLIO\PROYECTO FOMRATIVO BAKEND RAMA\api_proyecto_formativo"
+cd "<ruta donde clonaste el proyecto>"
 ```
 
 ---
@@ -49,17 +51,20 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ## 2. Base de datos
 
-Scripts en orden (pide la contraseña de `postgres`):
+Scripts en orden para recrear la base (pide la contraseña de `postgres`, dejada en `1234` para desarrollo):
 
 ```powershell
 $psql = "C:\Program Files\PostgreSQL\18\bin\psql.exe"
+& $psql -U postgres -c "DROP DATABASE IF EXISTS gastrosena_db"
 & $psql -U postgres -c "CREATE DATABASE gastrosena_db"
 & $psql -U postgres -d gastrosena_db -f database\01_ddl.sql
 & $psql -U postgres -d gastrosena_db -f database\02_dml.sql
 & $psql -U postgres -d gastrosena_db -f database\03_dcl.sql
 ```
 
-Si la base ya existía y la API no arranca por falta de auditoría:
+`03_dcl.sql` crea o actualiza `api_gastrosena` con contraseña `1234`.
+
+Si la base ya existía y no quieres borrarla, actualiza sin perder datos:
 
 ```powershell
 .\ACTUALIZAR-BASE-DE-DATOS.bat
@@ -69,6 +74,7 @@ O manualmente:
 
 ```powershell
 & $psql -U postgres -d gastrosena_db -f database\04_auditoria.sql
+& $psql -U postgres -d gastrosena_db -f database\05_compatibilidad.sql
 ```
 
 Comprobación rápida:
@@ -94,8 +100,8 @@ bd_servidor=localhost
 bd_puerto=5432
 bd_nombre=gastrosena_db
 bd_usuario=api_gastrosena
-bd_contrasena=CambieEstaClave2026
-clave_secreta_jwt=<clave larga generada arriba>
+bd_contrasena=1234
+clave_secreta_jwt=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 minutos_token_acceso=30
 dias_token_renovar=7
 origenes_cors=http://localhost:5173,https://burbano52100.github.io
@@ -103,7 +109,7 @@ hora_apertura=7
 hora_cierre=21
 ```
 
-`clave_secreta_jwt` es obligatoria: si falta, la API no arranca.
+`clave_secreta_jwt` es obligatoria: si falta, tiene menos de 32 caracteres o parece un ejemplo, la API no arranca. El valor de arriba es solo de desarrollo; cámbielo en producción por el generado con `python -c "import secrets; print(secrets.token_hex(32))"`.
 
 ---
 
@@ -337,7 +343,7 @@ curl.exe -s -X PATCH "$base/reservas/1/cancelar" -H $auth
 curl.exe -s -X PATCH "$base/reservas/1/pago" -H $auth -H "Content-Type: application/json" -d '{"estado":"PAGADO"}'
 ```
 
-Estados usados: `RESERVADO`, `PENDIENTE` (instructor), `PAGADO`, `NO_PAGADO`, `CANCELADA`. Solo se puede reservar/cancelar de 7:00 a 21:00 (`hora_apertura`/`hora_cierre` del `.env`).
+Estados usados: `RESERVADO`, `PENDIENTE` (instructor), `PAGADO`, `NO_PAGADO`, `CANCELADA`. Solo se puede reservar/cancelar de 7:00 a 21:00, hora de Colombia (UTC-5) (`hora_apertura`/`hora_cierre` del `.env`).
 
 ### 6.6 Cartera — `/cartera`
 
@@ -464,6 +470,8 @@ Periodos válidos: `dia`, `semana`, `mes`, `anio`.
 
 ## 7. Tabla rápida de URLs
 
+53 operaciones en 36 rutas bajo `/api/v1` + `GET /` de salud = 54 operaciones. En los listados, `saltar` va desde 0 y `limite` entre 1 y 100.
+
 | Método | Ruta | Rol |
 |---|---|---|
 | GET | `/` | público |
@@ -548,11 +556,11 @@ La colección guarda los tokens sola y trae casos buenos y malos (401, 403, 404,
 | Código | Significado |
 |---|---|
 | 400 | Regla de negocio incumplida (menú agotado, horario, stock negativo, etc.) |
-| 401 | Falta token, token inválido/vencido, usuario inactivo |
-| 403 | El rol no tiene permiso |
+| 401 | Falta token, token inválido/vencido, cuenta desactivada o bloqueada, o contraseña cambiada después de emitir el token; al renovar también sale si la cuenta no está activa |
+| 403 | El rol no tiene permiso; al iniciar sesión también sale si la cuenta está bloqueada o inactiva |
 | 404 | El registro no existe |
 | 409 | Valor repetido (correo, documento, ficha, menú del día, reserva duplicada...) |
-| 422 | JSON inválido o campos con formato incorrecto |
+| 422 | JSON inválido, campos con formato incorrecto o paginación fuera de rango (`saltar < 0`, `limite` fuera de 1..100). Los enums inválidos que revisa el servicio salen 400 |
 | 500 | Error interno (el detalle técnico queda en la consola) |
 
 Todas las respuestas de error tienen la forma `{"detalle": "..."}`.
@@ -564,4 +572,4 @@ Get-Process python | Stop-Process -Force
 netstat -ano | findstr :8000
 ```
 
-Si la API no arranca con "La base de datos no tiene las columnas de auditoría", ejecuta el paso 2 de la sección Base de datos y vuelve a correr `uvicorn`.
+Si la API no arranca y dice "La base de datos está desactualizada; faltan: ...", ejecuta el paso 2 de la sección Base de datos (recrear o aplicar `04_auditoria.sql` y `05_compatibilidad.sql`) y vuelve a correr `uvicorn`. El error 500 genérico al iniciar sesión también aparecía por esa causa: la columna esperada era `usuarios.contrasena` y la base antigua tenía `password_hash`.

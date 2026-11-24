@@ -27,11 +27,11 @@ from app.core.errores import respuestas_error
 enrutador = APIRouter(prefix="/autenticacion", tags=["Autenticación"])
 
 
-# Ruta para iniciar sesión (es la única que no necesita token)
+# Ruta para iniciar sesión (una de las que no necesita token)
 @enrutador.post(
     "/ingresar", response_model=token_respuesta,
     summary="Iniciar sesión",  # Título corto que sale en /docs
-    description="Revisa el correo y la contraseña y devuelve el token de acceso, el token para renovar y el rol. Después de 5 intentos fallidos la cuenta se bloquea 15 minutos y una cuenta inactiva no puede entrar. **Rol requerido:** ninguno (es la única ruta pública).",  # Explicación y rol que se necesita
+    description="Revisa el correo y la contraseña y devuelve el token de acceso, el token para renovar y el rol. Después de 5 intentos fallidos la cuenta se bloquea 15 minutos y una cuenta inactiva no puede entrar. **Rol requerido:** ninguno (es una de las rutas públicas).",  # Explicación y rol que se necesita
     responses=respuestas_error(401, 403, 422),  # Errores que puede responder
 )
 def ingresar(datos: ingreso_datos, bd: Session = Depends(obtener_bd)):

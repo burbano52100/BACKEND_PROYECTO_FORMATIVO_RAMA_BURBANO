@@ -17,8 +17,8 @@ from contextlib import asynccontextmanager
 
 # Traigo la lista de páginas que pueden usar la API
 from app.core.config import origenes_cors
-# Traigo la función que revisa si la base de datos tiene la auditoría
-from app.database.conexion import falta_auditoria
+# Traigo la función que revisa si la base de datos tiene las columnas actuales
+from app.database.conexion import columnas_faltantes
 # Traigo las funciones que arreglan los errores
 from app.core.errores import manejar_errores, manejar_datos_malos, manejar_error_integridad, manejar_error_interno
 # Traigo todos los archivos de rutas
@@ -27,10 +27,11 @@ from app.routers import auth, usuarios, fichas, menus, reservas, cartera, invent
 # Esto se ejecuta una vez cuando la API arranca (antes de recibir peticiones)
 @asynccontextmanager
 async def al_arrancar(aplicacion):
-    # Si la base de datos no tiene las columnas de auditoría, no dejo que la API arranque y explico qué hacer
-    if falta_auditoria():
+    # Si la base de datos no tiene las columnas actuales, no dejo que la API arranque y explico qué hacer
+    ausentes = columnas_faltantes()
+    if ausentes:
         # Muestro el error en la consola
-        raise Exception("La base de datos no tiene las columnas de auditoría. Ejecute ACTUALIZAR-BASE-DE-DATOS.bat (o database/04_auditoria.sql con el usuario postgres) y vuelva a encender la API.")
+        raise Exception("La base de datos está desactualizada; faltan: " + ", ".join(ausentes) + ". Cree la base con los scripts 01_ddl.sql, 02_dml.sql y 03_dcl.sql, o ejecute database/04_auditoria.sql y database/05_compatibilidad.sql con el usuario postgres.")
     # Aquí la API queda funcionando
     yield
 

@@ -1,14 +1,14 @@
 # Lógica para iniciar sesión, renovar el token y cambiar la contraseña
 
 # datetime es la fecha y hora actual y timedelta sirve para sumar minutos
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Modelo que uso para buscar por id
 from app.models.usuario import modelo_usuario
 # Funciones para responder los errores
 from app.core.excepciones import error_regla, error_no_autenticado, error_sin_permiso
 # Funciones de seguridad
-from app.core.seguridad import verificar_contrasena, encriptar_contrasena, contrasena_es_segura, crear_token, leer_token
+from app.core.seguridad import verificar_contrasena, encriptar_contrasena, contrasena_es_segura, crear_token, datos_token, huella_contrasena
 # Funciones para buscar y guardar en la base de datos
 from app.database.conexion import guardar_cambios, buscar_por_id
 # Repositorio de usuarios
@@ -20,12 +20,27 @@ maximo_intentos = 5
 minutos_bloqueo = 15
 
 
+# Dice si la cuenta sigue bloqueada; la columna guarda hora local sin zona horaria
+def esta_bloqueado(usuario):
+    if usuario.bloqueado_hasta is None:
+        return False
+    hasta = usuario.bloqueado_hasta
+    ahora = datetime.now(timezone.utc) if hasta.tzinfo is not None else datetime.now()
+    return hasta > ahora
+
+
 # Función que arma la respuesta con los dos tokens y el rol
 def armar_tokens(usuario):
+    # Datos de la cuenta que viajan dentro del token
+    estado = {
+        "activo": bool(usuario.activo),
+        "bloqueado": esta_bloqueado(usuario),
+        "huella": huella_contrasena(usuario.contrasena),
+    }
     # Devuelvo los tokens y el rol
     return {
-        "token_acceso": crear_token(usuario.id, "acceso"),  # Token para las peticiones
-        "token_renovar": crear_token(usuario.id, "renovar"),  # Token para renovar
+        "token_acceso": crear_token(usuario.id, "acceso", estado),  # Token para las peticiones
+        "token_renovar": crear_token(usuario.id, "renovar", estado),  # Token para renovar
         "tipo_token": "bearer",  # Tipo de token
         "rol": usuario.rol.nombre,  # Rol del usuario
     }
@@ -40,7 +55,7 @@ def ingresar(bd, datos):
         # No digo si el error es el correo o la contraseña por seguridad
         error_no_autenticado("Correo o contraseña incorrectos")
     # Si la cuenta está bloqueada y todavía no ha pasado el tiempo
-    if usuario.bloqueado_hasta is not None and usuario.bloqueado_hasta > datetime.now():
+    if esta_bloqueado(usuario):
         # Respondo 403
         error_sin_permiso("La cuenta está bloqueada por muchos intentos fallidos, intente más tarde")
     # Si la contraseña está mal
@@ -78,11 +93,15 @@ def ingresar(bd, datos):
 # Función para pedir tokens nuevos con el token para renovar
 def renovar_token(bd, datos):
     # Leo el token para renovar y saco el id del usuario
-    usuario_id = leer_token(datos.token_renovar, "renovar")
+    claims = datos_token(datos.token_renovar, "renovar")
+    try:
+        usuario_id = int(claims["usuario_id"])
+    except (KeyError, TypeError, ValueError):
+        error_no_autenticado("El token no es válido")
     # Busco el usuario
     usuario = buscar_por_id(bd, modelo_usuario, usuario_id)
-    # Si no existe o está desactivado
-    if usuario is None or usuario.activo == False:
+    # Si no existe, está desactivado, sigue bloqueado o cambió la contraseña
+    if usuario is None or not usuario.activo or esta_bloqueado(usuario) or claims.get("huella") != huella_contrasena(usuario.contrasena):
         # Respondo 401
         error_no_autenticado("El usuario no existe o está inactivo")
     # Devuelvo tokens nuevos

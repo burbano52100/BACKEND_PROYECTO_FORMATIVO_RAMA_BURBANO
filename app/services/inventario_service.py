@@ -10,9 +10,10 @@ from app.models.inventario import modelo_material, modelo_movimiento_inventario
 # Funciones para responder los errores
 from app.core.excepciones import error_regla, error_no_encontrado, error_duplicado
 # Funciones para buscar, guardar y borrar en la base de datos
-from app.database.conexion import guardar, guardar_cambios, eliminar, buscar_por_id
+from app.database.conexion import guardar, guardar_cambios, eliminar, buscar_por_id, agregar, poner_auditoria
 # Repositorios que uso
 from app.repositories import inventario_repository, receta_repository
+from app.repositories.paginacion import validar_paginacion
 
 # Categorías que se pueden usar
 categorias = ["PROTEINA", "GRANO", "VERDURA", "FRUTA", "LACTEO", "ABARROTE", "DESECHABLE"]
@@ -148,6 +149,7 @@ def listar_materiales(bd, buscar, categoria, estado, activo, saltar, limite):
             # Lo agrego a la lista
             lista.append(material_convertido)
     # Devuelvo solo la página que pidieron (aquí pagino en Python porque el estado se calcula)
+    validar_paginacion(saltar, limite)
     return lista[saltar:saltar + limite]
 
 
@@ -188,8 +190,10 @@ def crear_material(bd, datos, usuario):
         stock_minimo=datos.stock_minimo,  # Stock mínimo
         fecha_vencimiento=datos.fecha_vencimiento,  # Vencimiento
     )
-    # Lo guardo en la base de datos
-    guardar(bd, nuevo_material)
+    # Preparo el material y le pongo la auditoría antes de hacer una sola confirmación
+    agregar(bd, nuevo_material)
+    poner_auditoria(bd)
+    bd.flush()
     # Si empezó con stock, guardo una entrada en el kardex
     if datos.stock_inicial > 0:
         # Creo el movimiento de entrada
@@ -203,6 +207,8 @@ def crear_material(bd, datos, usuario):
         )
         # Lo guardo
         guardar(bd, movimiento)
+    else:
+        guardar_cambios(bd, nuevo_material)
     # Devuelvo el material
     return convertir_material(nuevo_material)
 
@@ -281,8 +287,12 @@ def registrar_movimiento(bd, datos, usuario):
     if datos.tipo not in tipos_movimiento:
         # Respondo 400
         error_regla("El tipo debe ser ENTRADA, SALIDA o MERMA")
-    # Busco el material y reviso que esté activo
-    material = buscar_material_activo(bd, datos.material_id)
+    # Busco el material y lo bloqueo para registrar el movimiento sin perder stock
+    material = inventario_repository.buscar_material_para_movimiento(bd, datos.material_id)
+    if material is None:
+        error_no_encontrado("El material no existe")
+    if material.activo == False:
+        error_regla("El material está inactivo")
     # Si es una entrada
     if datos.tipo == "ENTRADA":
         # Sumo la cantidad al stock
